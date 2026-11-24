@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "KaamSetu",
+    "slug": "kaamsetu",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "kaamsetu",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": false,
+    "android": {
+      "package": "com.kaamsetu.app",
+      "permissions": [
+        "RECORD_AUDIO",
+        "INTERNET",
+        "MODIFY_AUDIO_SETTINGS",
+        "POST_NOTIFICATIONS",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ]
+    },
+    "extra": {
+      "eas": {
+        "projectId": "87fc52b1-dc97-47b3-bb06-8044d0e2530b"
+      }
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-av",
+        {
+          "microphonePermission": "KaamSetu needs microphone access for voice updates on site."
+        }
+      ],
+      "expo-notifications"
+    ],
+    "owner": "lovin123"
+  }
+}

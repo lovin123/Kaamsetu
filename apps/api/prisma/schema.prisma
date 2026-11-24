@@ -1,0 +1,266 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  WORKER
+  SUPERVISOR
+}
+
+enum TaskStatus {
+  pending
+  in_progress
+  blocked
+  completed
+}
+
+enum IncidentSeverity {
+  low
+  medium
+  high
+  critical
+}
+
+enum IncidentStatus {
+  open
+  acknowledged
+  resolved
+  closed
+}
+
+enum MaterialRequestStatus {
+  pending
+  approved
+  rejected
+  fulfilled
+}
+
+enum BlockerStatus {
+  open
+  resolved
+}
+
+enum NotificationType {
+  task_assigned
+  progress_update
+  incident
+  material_request
+  blocker
+  summary
+  system
+}
+
+model User {
+  id                 String   @id @default(uuid())
+  phone              String   @unique
+  passwordHash       String
+  name               String
+  role               Role
+  preferredLanguage  String   @default("hi-IN")
+  fcmToken           String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  memberships        ProjectMember[]
+  assignedTasks      Task[]              @relation("TaskAssignee")
+  createdTasks       Task[]              @relation("TaskCreator")
+  progressUpdates    TaskProgress[]
+  incidents          Incident[]          @relation("IncidentReporter")
+  materialRequests   MaterialRequest[]
+  blockers           Blocker[]
+  conversations      Conversation[]
+  actionLogs         ActionLog[]
+  notifications      Notification[]
+}
+
+model Project {
+  id          String   @id @default(uuid())
+  name        String
+  code        String   @unique
+  location    String?
+  description String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members           ProjectMember[]
+  tasks             Task[]
+  incidents         Incident[]
+  materialRequests  MaterialRequest[]
+  blockers          Blocker[]
+  conversations     Conversation[]
+}
+
+model ProjectMember {
+  id        String   @id @default(uuid())
+  projectId String
+  userId    String
+  role      Role
+  joinedAt  DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+}
+
+model Task {
+  id              String     @id @default(uuid())
+  projectId       String
+  assigneeId      String?
+  createdById     String
+  title           String
+  description     String?
+  location        String?
+  status          TaskStatus @default(pending)
+  progressPercent Int        @default(0)
+  dueDate         DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  project          Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignee         User?             @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  createdBy        User              @relation("TaskCreator", fields: [createdById], references: [id])
+  progressUpdates  TaskProgress[]
+  incidents        Incident[]
+  materialRequests MaterialRequest[]
+  blockers         Blocker[]
+}
+
+model TaskProgress {
+  id              String   @id @default(uuid())
+  taskId          String
+  userId          String
+  progressPercent Int
+  notes           String?
+  source          String   @default("voice")
+  transcript      String?
+  createdAt       DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id])
+}
+
+model Incident {
+  id          String           @id @default(uuid())
+  projectId   String
+  taskId      String?
+  reporterId  String
+  category    String
+  title       String
+  description String
+  location    String?
+  severity    IncidentSeverity @default(medium)
+  status      IncidentStatus   @default(open)
+  transcript  String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  project  Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task     Task?   @relation(fields: [taskId], references: [id])
+  reporter User    @relation("IncidentReporter", fields: [reporterId], references: [id])
+}
+
+model MaterialRequest {
+  id           String                @id @default(uuid())
+  projectId    String
+  taskId       String?
+  requesterId  String
+  materialName String
+  quantity     Float
+  unit         String
+  urgency      String                @default("normal")
+  notes        String?
+  status       MaterialRequestStatus @default(pending)
+  transcript   String?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task      Task?   @relation(fields: [taskId], references: [id])
+  requester User    @relation(fields: [requesterId], references: [id])
+}
+
+model Blocker {
+  id         String        @id @default(uuid())
+  projectId  String
+  taskId     String
+  reporterId String
+  reason     String
+  category   String        @default("other")
+  status     BlockerStatus @default(open)
+  transcript String?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  project  Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task     Task    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  reporter User    @relation(fields: [reporterId], references: [id])
+}
+
+model Conversation {
+  id        String   @id @default(uuid())
+  userId    String
+  projectId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project  Project?  @relation(fields: [projectId], references: [id])
+  messages Message[]
+}
+
+model Message {
+  id             String   @id @default(uuid())
+  conversationId String
+  role           String
+  content        String
+  audioUrl       String?
+  intentJson     Json?
+  language       String?
+  createdAt      DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+}
+
+model ActionLog {
+  id               String   @id @default(uuid())
+  userId           String
+  idempotencyKey   String?  @unique
+  intent           String
+  transcript       String
+  payload          Json
+  result           Json?
+  confidence       Float?
+  confirmed        Boolean  @default(false)
+  status           String   @default("pending")
+  createdAt        DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  type      NotificationType
+  title     String
+  body      String
+  data      Json?
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model IdempotencyRecord {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  userId    String
+  response  Json
+  createdAt DateTime @default(now())
+}

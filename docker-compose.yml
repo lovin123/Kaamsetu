@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: kaamsetu-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kaamsetu
+      POSTGRES_PASSWORD: kaamsetu
+      POSTGRES_DB: kaamsetu
+    ports:
+      - "5433:5432"
+    volumes:
+      - kaamsetu_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kaamsetu -d kaamsetu"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  kaamsetu_pg_data:
