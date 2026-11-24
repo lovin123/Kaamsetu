@@ -33,12 +33,15 @@ export function AudioPoCScreen() {
     try {
       const permission = await Audio.requestPermissionsAsync();
       if (!permission.granted) throw new Error('Mic permission denied');
-      if (!native) {
-        setLog('Native KaamSetuAudio missing — build with expo run:android');
-        return;
+      if (mode === 'deepfilternet') {
+        await KaamSetuAudio.assertDeepFilterNetReady();
+      } else if (!KaamSetuAudio.isNativeAvailable()) {
+        throw new Error('Native KaamSetuAudio missing — build with expo run:android');
       }
       const started = await KaamSetuAudio.startRecording(mode);
-      setLog(`Recording with ${started.mode} @ ${started.sampleRate}Hz… speak for ~3s`);
+      setLog(
+        `Recording with ${started.mode} @ ${started.sampleRate}Hz (DFN classpath=${started.deepFilterNetOnClasspath})… speak for ~3s`,
+      );
       await new Promise((r) => setTimeout(r, 3000));
       const stopped = await KaamSetuAudio.stopRecording();
       setLog(

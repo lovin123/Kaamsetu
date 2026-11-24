@@ -4,9 +4,12 @@
   "private": true,
   "main": "index.js",
   "scripts": {
+    "ensure:deepfilternet": "node ./modules/kaamsetu-audio/scripts/ensure-deepfilternet.js",
+    "verify:deepfilternet": "npm run ensure:deepfilternet && node ./modules/kaamsetu-audio/scripts/verify-dfn-static.js",
+    "preandroid": "npm run verify:deepfilternet",
     "start": "expo start --dev-client",
     "android": "expo run:android",
-    "prebuild": "expo prebuild --platform android",
+    "prebuild": "npm run verify:deepfilternet && expo prebuild --platform android",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

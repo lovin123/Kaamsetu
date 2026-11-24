@@ -27,6 +27,7 @@ class VoiceRecorder(private val context: Context) {
   private val pcm = ByteArrayOutputStream()
   private var startedAt = 0L
   private var requestedMode = DenoiseMode.DEEPFILTERNET
+  private var frameBytes = 1920
   var activeMode: DenoiseMode = DenoiseMode.OFF
     private set
   var fellBack = false
@@ -42,6 +43,9 @@ class VoiceRecorder(private val context: Context) {
     val channelConfig = AudioFormat.CHANNEL_IN_MONO
     val audioFormat = AudioFormat.ENCODING_PCM_16BIT
     val minBuf = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+    if (minBuf <= 0) {
+      throw IllegalStateException("AudioRecord.getMinBufferSize failed ($minBuf)")
+    }
     val bufferSize = minBuf.coerceAtLeast(sampleRate / 5) * 2
 
     val record = AudioRecord(
@@ -57,14 +61,30 @@ class VoiceRecorder(private val context: Context) {
     }
     audioRecord = record
 
-    processor = createProcessorChain(mode, record.audioSessionId)
-    activeMode = processor?.mode ?: DenoiseMode.OFF
+    try {
+      processor = createProcessorChain(mode, record.audioSessionId)
+      activeMode = processor?.mode ?: DenoiseMode.OFF
 
-    // DFN: exact native frame size in bytes. NS/off: 20 ms @ 48 kHz mono 16-bit = 1920.
-    val dfn = processor as? DeepFilterNetProcessor
-    val frameBytes = dfn?.requiredFrameLength()?.takeIf { it > 0 } ?: 1920
+      // DFN: exact native frame size in bytes. NS/off: 20 ms @ 48 kHz mono 16-bit = 1920.
+      val dfn = processor as? DeepFilterNetProcessor
+      frameBytes = dfn?.requiredFrameLength()?.takeIf { it > 0 } ?: 1920
 
-    record.startRecording()
+      record.startRecording()
+    } catch (t: Throwable) {
+      try {
+        processor?.release()
+      } catch (_: Throwable) {
+      }
+      processor = null
+      try {
+        record.release()
+      } catch (_: Throwable) {
+      }
+      audioRecord = null
+      activeMode = DenoiseMode.OFF
+      throw t
+    }
+
     recording.set(true)
     startedAt = System.currentTimeMillis()
 
@@ -73,46 +93,56 @@ class VoiceRecorder(private val context: Context) {
       val pending = ByteArrayOutputStream()
       val direct = ByteBuffer.allocateDirect(frameBytes).order(ByteOrder.LITTLE_ENDIAN)
 
-      while (recording.get()) {
-        val read = record.read(readBuf, 0, readBuf.size)
-        if (read > 0) {
-          pending.write(readBuf, 0, read)
-          while (pending.size() >= frameBytes) {
-            val chunk = pending.toByteArray()
-            val frame = chunk.copyOfRange(0, frameBytes)
-            val rest = chunk.copyOfRange(frameBytes, chunk.size)
-            pending.reset()
-            if (rest.isNotEmpty()) pending.write(rest)
-
-            if (!processAndAppend(direct, frame, frameBytes, record)) {
-              break
-            }
+      try {
+        while (recording.get()) {
+          val read = record.read(readBuf, 0, readBuf.size)
+          if (read > 0) {
+            pending.write(readBuf, 0, read)
+            drainPending(pending, direct, record)
+          } else if (read < 0) {
+            Log.w(TAG, "AudioRecord.read error=$read")
+            break
           }
-        } else if (read < 0) {
-          Log.w(TAG, "AudioRecord.read error=$read")
-          break
         }
-      }
 
-      // Flush trailing partial frame only for non-DFN modes (pad). DFN needs full frames.
-      if (recording.get().not() && pending.size() > 0 && activeMode != DenoiseMode.DEEPFILTERNET) {
-        val tail = pending.toByteArray()
-        val padded = ByteArray(frameBytes)
-        System.arraycopy(tail, 0, padded, 0, tail.size.coerceAtMost(frameBytes))
-        processAndAppend(direct, padded, frameBytes, record)
+        // Always flush a trailing partial frame (zero-pad) so short utterances
+        // are not truncated below one DeepFilterNet frame.
+        if (pending.size() > 0) {
+          val tail = pending.toByteArray()
+          val padded = ByteArray(frameBytes)
+          System.arraycopy(tail, 0, padded, 0, tail.size.coerceAtMost(frameBytes))
+          processAndAppend(direct, padded, frameBytes, record)
+        }
+      } catch (t: Throwable) {
+        Log.e(TAG, "Capture loop failed: ${t.message}", t)
       }
     }
     return activeMode
   }
 
+  private fun drainPending(
+    pending: ByteArrayOutputStream,
+    direct: ByteBuffer,
+    record: AudioRecord,
+  ) {
+    while (pending.size() >= frameBytes) {
+      val chunk = pending.toByteArray()
+      val frame = chunk.copyOfRange(0, frameBytes)
+      val rest = chunk.copyOfRange(frameBytes, chunk.size)
+      pending.reset()
+      if (rest.isNotEmpty()) pending.write(rest)
+      processAndAppend(direct, frame, frameBytes, record)
+    }
+  }
+
   private fun processAndAppend(
     direct: ByteBuffer,
     frame: ByteArray,
-    frameBytes: Int,
+    frameLen: Int,
     record: AudioRecord,
-  ): Boolean {
+  ) {
     direct.clear()
-    direct.put(frame, 0, frameBytes)
+    direct.put(frame, 0, frameLen)
     direct.flip()
 
     val ok = processor?.processFrame(direct) ?: true
@@ -129,23 +159,20 @@ class VoiceRecorder(private val context: Context) {
         activeMode = DenoiseMode.OFF
         fellBack = true
       }
-      // Re-process this frame with the fallback (passthrough / NS session path)
       direct.rewind()
       processor?.processFrame(direct)
     }
 
-    // Ensure we can read the full processed frame (DFN processFrame may leave position at end)
     direct.rewind()
     val out = ByteArray(direct.remaining())
     direct.get(out)
     synchronized(pcm) { pcm.write(out) }
-    return true
   }
 
   fun stop(): Result {
-    recording.set(false)
+    val wasRecording = recording.getAndSet(false)
     try {
-      recordingThread?.join(2000)
+      recordingThread?.join(3000)
     } catch (_: InterruptedException) {
     }
     recordingThread = null
@@ -158,7 +185,17 @@ class VoiceRecorder(private val context: Context) {
     processor?.release()
     processor = null
 
-    val pcmBytes = synchronized(pcm) { pcm.toByteArray() }
+    val pcmBytes = synchronized(pcm) {
+      val bytes = pcm.toByteArray()
+      pcm.reset()
+      bytes
+    }
+    if (!wasRecording) {
+      throw IllegalStateException("Not recording")
+    }
+    if (pcmBytes.isEmpty()) {
+      throw IllegalStateException("No audio captured — hold the mic a bit longer")
+    }
     val durationMs = (System.currentTimeMillis() - startedAt).coerceAtLeast(0)
     val wav = pcmToWav(pcmBytes, 48000, 1, 16)
     val outFile = File(context.cacheDir, "kaamsetu-${System.currentTimeMillis()}.wav")
@@ -176,16 +213,18 @@ class VoiceRecorder(private val context: Context) {
       DenoiseMode.DEEPFILTERNET -> {
         val dfn = DeepFilterNetProcessor(context)
         if (dfn.initialize(sessionId)) return dfn
-        fellBack = true
-        Log.w(TAG, "DeepFilterNet unavailable — falling back to NoiseSuppressor")
-        val ns = AndroidNoiseSuppressorProcessor()
-        if (ns.initialize(sessionId)) return ns
-        return PassthroughProcessor()
+        // Hard-fail: do not silently degrade when the caller asked for DeepFilterNet.
+        // Missing JNI/model must surface so Voice UI can show a rebuild error.
+        throw IllegalStateException(
+          "DeepFilterNet failed to initialize (JNI/model). " +
+            "Rebuild with: npm run ensure:deepfilternet && npx expo run:android",
+        )
       }
       DenoiseMode.ANDROID_NS -> {
         val ns = AndroidNoiseSuppressorProcessor()
         if (ns.initialize(sessionId)) return ns
         fellBack = true
+        Log.w(TAG, "NoiseSuppressor unavailable — passthrough")
         return PassthroughProcessor()
       }
       DenoiseMode.OFF -> return PassthroughProcessor()

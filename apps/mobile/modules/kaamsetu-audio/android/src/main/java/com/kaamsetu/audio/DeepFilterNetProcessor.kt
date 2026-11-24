@@ -2,37 +2,58 @@ package com.kaamsetu.audio
 
 import android.content.Context
 import android.util.Log
+import com.rikorose.deepfilternet.NativeDeepFilterNet
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
- * Wraps Kaleyra AndroidDeepFilterNet (JNI). Primary denoise engine.
+ * Primary denoise engine — Kaleyra AndroidDeepFilterNet (bundled model AAR).
  *
- * Contract (Kaleyra README / DeepAudioFilter sample):
+ * Contract (Kaleyra README + NativeDeepFilterNetTest):
  * - 48 kHz mono 16-bit PCM
- * - direct little-endian ByteBuffer sized to [frameLength] bytes
- * - [processFrame] modifies the buffer in-place; caller must rewind before reading
- * - Falls back by returning false from initialize/processFrame
+ * - Wait for [NativeDeepFilterNet.onModelLoaded] before frameLength / processFrame
+ * - direct little-endian ByteBuffer sized to frameLength bytes
+ * - processFrame modifies the buffer in-place and returns SNR (or -1 if not ready)
  */
 class DeepFilterNetProcessor(private val context: Context) : AudioProcessingService {
   override val mode = DenoiseMode.DEEPFILTERNET
-  private var engine: Any? = null
+  private var engine: NativeDeepFilterNet? = null
   private var frameLength = 0
   private var failed = false
 
   override fun initialize(audioSessionId: Int): Boolean {
     return try {
-      val clazz = Class.forName("com.rikorose.deepfilternet.NativeDeepFilterNet")
-      val ctor = clazz.getConstructor(Context::class.java)
-      val instance = ctor.newInstance(context)
+      // applicationContext: matches Kaleyra NativeDeepFilterNetLoader
+      val appCtx = context.applicationContext
+      val instance = NativeDeepFilterNet(appCtx)
 
-      val setAttenuation =
-        clazz.getMethod("setAttenuationLimit", Float::class.javaPrimitiveType)
-      setAttenuation.invoke(instance, 30f)
+      // Model load is async (coroutine). Official tests: frameLength == -1 until onModelLoaded.
+      val latch = CountDownLatch(1)
+      instance.onModelLoaded {
+        latch.countDown()
+      }
+      val loaded = latch.await(MODEL_LOAD_TIMEOUT_SEC, TimeUnit.SECONDS)
+      if (!loaded) {
+        Log.w(TAG, "DeepFilterNet model load timed out after ${MODEL_LOAD_TIMEOUT_SEC}s")
+        tryRelease(instance)
+        failed = true
+        return false
+      }
 
-      val len = readFrameLength(clazz, instance)
+      val attenOk = instance.setAttenuationLimit(ATTENUATION_DB)
+      if (!attenOk) {
+        Log.w(TAG, "setAttenuationLimit($ATTENUATION_DB) failed after onModelLoaded")
+        tryRelease(instance)
+        failed = true
+        return false
+      }
+
+      val len = instance.frameLength.toInt()
+      // Official test asserts frameLength != -1 after load; must be positive even byte count.
       if (len <= 0 || len % 2 != 0) {
-        Log.w(TAG, "Invalid DeepFilterNet frameLength=$len")
+        Log.w(TAG, "Invalid DeepFilterNet frameLength=$len after model load")
         tryRelease(instance)
         failed = true
         return false
@@ -40,17 +61,18 @@ class DeepFilterNetProcessor(private val context: Context) : AudioProcessingServ
 
       frameLength = len
       engine = instance
-      Log.i(TAG, "DeepFilterNet ready frameLength=$frameLength bytes")
+      Log.i(TAG, "DeepFilterNet ready frameLength=$frameLength bytes atten=${ATTENUATION_DB}dB")
       true
     } catch (t: Throwable) {
-      Log.w(TAG, "DeepFilterNet init failed: ${t.message}")
+      Log.w(TAG, "DeepFilterNet init failed: ${t.message}", t)
       failed = true
       false
     }
   }
 
   override fun processFrame(buffer: ByteBuffer): Boolean {
-    if (failed || engine == null) return false
+    val eng = engine
+    if (failed || eng == null) return false
     if (!buffer.isDirect) {
       Log.w(TAG, "DeepFilterNet requires a direct ByteBuffer")
       failed = true
@@ -66,14 +88,17 @@ class DeepFilterNetProcessor(private val context: Context) : AudioProcessingServ
     }
     return try {
       buffer.order(ByteOrder.LITTLE_ENDIAN)
-      val clazz = engine!!.javaClass
-      val process = clazz.getMethod("processFrame", ByteBuffer::class.java)
-      process.invoke(engine, buffer)
-      // Kaleyra sample rewinds after processFrame before reading processed PCM
+      // Returns SNR; -1f means model not loaded / released (per Kaleyra tests)
+      val snr = eng.processFrame(buffer)
+      if (snr < 0f) {
+        Log.w(TAG, "DeepFilterNet processFrame returned snr=$snr")
+        failed = true
+        return false
+      }
       buffer.rewind()
       true
     } catch (t: Throwable) {
-      Log.w(TAG, "DeepFilterNet process failed: ${t.message}")
+      Log.w(TAG, "DeepFilterNet process failed: ${t.message}", t)
       failed = true
       false
     }
@@ -89,24 +114,25 @@ class DeepFilterNetProcessor(private val context: Context) : AudioProcessingServ
 
   fun requiredFrameLength(): Int = frameLength
 
-  private fun readFrameLength(clazz: Class<*>, instance: Any): Int {
-    // Kotlin property `frameLength` → getFrameLength(); also try field for safety
-    return try {
-      (clazz.getMethod("getFrameLength").invoke(instance) as Number).toInt()
-    } catch (_: Throwable) {
-      val field = clazz.getField("frameLength")
-      (field.get(instance) as Number).toInt()
-    }
-  }
-
-  private fun tryRelease(instance: Any) {
+  private fun tryRelease(instance: NativeDeepFilterNet) {
     try {
-      instance.javaClass.getMethod("release").invoke(instance)
+      instance.release()
     } catch (_: Throwable) {
     }
   }
 
   companion object {
     private const val TAG = "KaamSetuDFN"
+    private const val ATTENUATION_DB = 30f
+    private const val MODEL_LOAD_TIMEOUT_SEC = 20L
+
+    /** Hard classpath check — true only when the Kaleyra AAR was packaged into the APK. */
+    fun isOnClasspath(): Boolean =
+      try {
+        Class.forName("com.rikorose.deepfilternet.NativeDeepFilterNet")
+        true
+      } catch (_: Throwable) {
+        false
+      }
   }
 }

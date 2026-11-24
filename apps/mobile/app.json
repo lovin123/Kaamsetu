@@ -31,7 +31,8 @@
           "microphonePermission": "KaamSetu needs microphone access for voice updates on site."
         }
       ],
-      "expo-notifications"
+      "expo-notifications",
+      "./plugins/withDeepFilterNet.js"
     ],
     "owner": "lovin123"
   }

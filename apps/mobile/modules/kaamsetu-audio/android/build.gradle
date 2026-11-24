@@ -4,6 +4,8 @@ apply plugin: 'kotlin-android'
 group = 'com.kaamsetu.audio'
 version = '0.1.0'
 
+def deepFilterNetAar = file("${projectDir}/libs/android-deepfilternet-0.0.8.aar")
+
 android {
   namespace "com.kaamsetu.audio"
   compileSdkVersion safeExtGet("compileSdkVersion", 35)
@@ -11,6 +13,7 @@ android {
   defaultConfig {
     minSdkVersion safeExtGet("minSdkVersion", 24)
     targetSdkVersion safeExtGet("targetSdkVersion", 34)
+    consumerProguardFiles 'proguard-rules.pro'
   }
 
   lintOptions {
@@ -26,8 +29,33 @@ repositories {
 dependencies {
   implementation project(':expo-modules-core')
   implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:${safeExtGet('kotlinVersion', '1.9.24')}"
-  // Kaleyra DeepFilterNet Android JNI library
-  implementation 'io.github.kaleyravideo:android-deepfilternet:0.0.8'
+
+  // ALWAYS use the Maven coordinate (not files(aar) alone).
+  // Reason: the POM pulls kotlinx-coroutines-core + androidx.core, which NativeDeepFilterNet
+  // needs for async model load. `files(aar)` drops those transitive deps and can also
+  // fail to package JNI/resources into the app APK from a library module.
+  api 'io.github.kaleyravideo:android-deepfilternet:0.0.8'
+
+  // Explicit pins matching the AAR POM so even if metadata resolution is odd, coroutines exist.
+  implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0'
+  implementation 'androidx.core:core-ktx:1.10.1'
+}
+
+tasks.register('verifyDeepFilterNetAar') {
+  doLast {
+    // Vendored copy is for offline/CI checksum + ensure script; runtime dep is Maven.
+    if (!deepFilterNetAar.exists() || deepFilterNetAar.length() < 1_000_000) {
+      logger.warn("[kaamsetu-audio] Vendored DeepFilterNet AAR missing at ${deepFilterNetAar}. Run npm run ensure:deepfilternet")
+    } else {
+      logger.lifecycle("[kaamsetu-audio] Vendored DeepFilterNet AAR present (${deepFilterNetAar.length()} bytes); runtime uses Maven 0.0.8")
+    }
+  }
+}
+
+afterEvaluate {
+  tasks.matching { it.name.startsWith('compile') && it.name.contains('Kotlin') }.configureEach {
+    dependsOn('verifyDeepFilterNetAar')
+  }
 }
 
 def safeExtGet(prop, fallback) {

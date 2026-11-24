@@ -10,13 +10,7 @@ class KaamSetuAudioModule : Module() {
     Name("KaamSetuAudio")
 
     Function("isAvailable") {
-      // True when Kaleyra JNI class is on the classpath (bundled AAR linked into Dev Client)
-      try {
-        Class.forName("com.rikorose.deepfilternet.NativeDeepFilterNet")
-        true
-      } catch (_: Throwable) {
-        false
-      }
+      DeepFilterNetProcessor.isOnClasspath()
     }
 
     Function("getActiveMode") {
@@ -26,11 +20,27 @@ class KaamSetuAudioModule : Module() {
     AsyncFunction("startRecording") { mode: String ->
       val ctx = appContext.reactContext
         ?: throw IllegalStateException("No React context")
+
+      val requested = DenoiseMode.from(mode)
+      if (requested == DenoiseMode.DEEPFILTERNET && !DeepFilterNetProcessor.isOnClasspath()) {
+        throw IllegalStateException(
+          "DeepFilterNet AAR missing from APK. Rebuild with: npm run ensure:deepfilternet && npx expo run:android",
+        )
+      }
+
       if (recorder == null) recorder = VoiceRecorder(ctx)
-      val active = recorder!!.start(DenoiseMode.from(mode))
+      val active = recorder!!.start(requested)
+
+      if (requested == DenoiseMode.DEEPFILTERNET && active != DenoiseMode.DEEPFILTERNET) {
+        throw IllegalStateException(
+          "DeepFilterNet did not become active (got ${active.wire()}). Check libdf.so packaging.",
+        )
+      }
+
       mapOf(
         "mode" to active.wire(),
         "sampleRate" to 48000,
+        "deepFilterNetOnClasspath" to DeepFilterNetProcessor.isOnClasspath(),
       )
     }
 

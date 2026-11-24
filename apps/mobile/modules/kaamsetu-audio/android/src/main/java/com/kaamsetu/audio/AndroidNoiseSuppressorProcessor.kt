@@ -18,9 +18,10 @@ class AndroidNoiseSuppressorProcessor : AudioProcessingService {
       return false
     }
     return try {
-      suppressor = NoiseSuppressor.create(audioSessionId)
-      suppressor?.enabled = true
-      suppressor != null
+      val ns = NoiseSuppressor.create(audioSessionId) ?: return false
+      ns.enabled = true
+      suppressor = ns
+      true
     } catch (t: Throwable) {
       Log.w(TAG, "NoiseSuppressor create failed: ${t.message}")
       false
@@ -28,8 +29,9 @@ class AndroidNoiseSuppressorProcessor : AudioProcessingService {
   }
 
   override fun processFrame(buffer: ByteBuffer): Boolean {
-    // Platform NS operates on the AudioRecord session; frames pass through.
-    return suppressor?.enabled == true
+    // Platform NS operates on the AudioRecord session; frames always pass through.
+    // Return true whenever we still hold a suppressor so mid-session capture continues.
+    return suppressor != null
   }
 
   override fun release() {

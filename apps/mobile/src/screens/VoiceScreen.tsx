@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -31,6 +32,7 @@ export function VoiceScreen() {
   const [state, setState] = useState<VoiceState>('idle');
   const [mode, setMode] = useState<DenoiseMode>('deepfilternet');
   const [activeMode, setActiveMode] = useState<string>('—');
+  const [dfnReady, setDfnReady] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [reply, setReply] = useState('');
   const [actionId, setActionId] = useState<string | null>(null);
@@ -49,8 +51,11 @@ export function VoiceScreen() {
       } catch {
         // ignore
       }
+      if (Platform.OS === 'android' && native) {
+        setDfnReady(await KaamSetuAudio.isAvailable());
+      }
     })();
-  }, []);
+  }, [native]);
 
   const rememberConversation = async (id?: string) => {
     if (!id) return;
@@ -59,6 +64,7 @@ export function VoiceScreen() {
   };
 
   const cycleMode = () => {
+    // Android always offers DeepFilterNet first; NS/off remain for debugging.
     const order: DenoiseMode[] = ['deepfilternet', 'android_ns', 'off'];
     const next = order[(order.indexOf(mode) + 1) % order.length];
     setMode(next);
@@ -83,22 +89,41 @@ export function VoiceScreen() {
         Alert.alert('Microphone permission required');
         return;
       }
-      if (native) {
+
+      // Android: kaamsetu-audio only — never silent expo-av (no denoise).
+      if (Platform.OS === 'android') {
+        if (mode === 'deepfilternet') {
+          await KaamSetuAudio.assertDeepFilterNetReady();
+        } else if (!KaamSetuAudio.isNativeAvailable()) {
+          throw new Error(
+            'KaamSetuAudio native module is not linked. Rebuild with: npx expo run:android',
+          );
+        }
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          playsInSilentModeIOS: true,
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
+        });
         const started = await KaamSetuAudio.startRecording(mode);
         setActiveMode(started.mode);
-      } else {
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: true,
-          playsInSilentModeIOS: true,
-        });
-        const recording = new Audio.Recording();
-        await recording.prepareToRecordAsync(
-          Audio.RecordingOptionsPresets.HIGH_QUALITY,
-        );
-        await recording.startAsync();
-        recordingRef.current = recording;
-        setActiveMode('expo-av (no native denoise)');
+        if (started.mode === 'deepfilternet') setDfnReady(true);
+        setState('recording');
+        return;
       }
+
+      // iOS: DeepFilterNet is Android-only; use expo-av.
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
+      const recording = new Audio.Recording();
+      await recording.prepareToRecordAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY,
+      );
+      await recording.startAsync();
+      recordingRef.current = recording;
+      setActiveMode('expo-av (iOS — no DeepFilterNet)');
       setState('recording');
     } catch (err) {
       Alert.alert('Record failed', (err as Error).message);
@@ -111,7 +136,7 @@ export function VoiceScreen() {
     let uploadName = 'voice.wav';
     let uploadType = 'audio/wav';
     try {
-      if (native) {
+      if (Platform.OS === 'android') {
         const result = await KaamSetuAudio.stopRecording();
         uri = result.uri;
         setActiveMode(
@@ -125,7 +150,6 @@ export function VoiceScreen() {
         await recording.stopAndUnloadAsync();
         uri = recording.getURI() || '';
         recordingRef.current = null;
-        // expo-av HIGH_QUALITY is typically AAC/m4a on Android
         uploadName = 'voice.m4a';
         uploadType = 'audio/m4a';
       }
@@ -212,7 +236,12 @@ export function VoiceScreen() {
             Mode: {mode} · Active: {activeMode}
           </Text>
           <Text style={{ color: c.muted, fontSize: 12 }}>
-            Tap to cycle modes · Native module: {native ? 'yes' : 'no (expo-av fallback)'}
+            Tap to cycle modes · Native: {native ? 'yes' : 'no'} · DeepFilterNet:{' '}
+            {Platform.OS !== 'android'
+              ? 'n/a (iOS)'
+              : dfnReady
+                ? 'packaged'
+                : 'missing — run npm run android'}
           </Text>
         </Pressable>
 
