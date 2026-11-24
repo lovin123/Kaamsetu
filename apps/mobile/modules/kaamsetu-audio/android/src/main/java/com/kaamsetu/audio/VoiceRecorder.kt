@@ -13,6 +13,12 @@ import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
+/**
+ * Captures 48 kHz mono PCM16, runs DeepFilterNet (or NS / passthrough), writes WAV.
+ *
+ * DeepFilterNet path matches Kaleyra's FixedSizeAudioChunker pattern:
+ * accumulate bytes until a full [frameLength] frame is available, then process.
+ */
 class VoiceRecorder(private val context: Context) {
   private var audioRecord: AudioRecord? = null
   private var processor: AudioProcessingService? = null
@@ -54,7 +60,7 @@ class VoiceRecorder(private val context: Context) {
     processor = createProcessorChain(mode, record.audioSessionId)
     activeMode = processor?.mode ?: DenoiseMode.OFF
 
-    // DeepFilterNet requires its native frame length; NS/passthrough accept 20ms @ 48kHz.
+    // DFN: exact native frame size in bytes. NS/off: 20 ms @ 48 kHz mono 16-bit = 1920.
     val dfn = processor as? DeepFilterNetProcessor
     val frameBytes = dfn?.requiredFrameLength()?.takeIf { it > 0 } ?: 1920
 
@@ -63,47 +69,83 @@ class VoiceRecorder(private val context: Context) {
     startedAt = System.currentTimeMillis()
 
     recordingThread = thread(name = "KaamSetuCapture") {
-      val frame = ByteArray(frameBytes)
+      val readBuf = ByteArray(frameBytes.coerceAtLeast(minBuf.coerceAtLeast(2048)))
+      val pending = ByteArrayOutputStream()
       val direct = ByteBuffer.allocateDirect(frameBytes).order(ByteOrder.LITTLE_ENDIAN)
+
       while (recording.get()) {
-        val read = record.read(frame, 0, frame.size)
+        val read = record.read(readBuf, 0, readBuf.size)
         if (read > 0) {
-          direct.clear()
-          direct.put(frame, 0, read)
-          // Pad short reads so DFN always sees a full frame
-          while (direct.position() < frameBytes) {
-            direct.put(0)
-          }
-          direct.flip()
-          val ok = processor?.processFrame(direct) ?: true
-          if (!ok && processor?.mode == DenoiseMode.DEEPFILTERNET) {
-            Log.w(TAG, "DeepFilterNet failed mid-session — switching to NoiseSuppressor")
-            processor?.release()
-            val ns = AndroidNoiseSuppressorProcessor()
-            if (ns.initialize(record.audioSessionId)) {
-              processor = ns
-              activeMode = DenoiseMode.ANDROID_NS
-              fellBack = true
-            } else {
-              processor = PassthroughProcessor()
-              activeMode = DenoiseMode.OFF
-              fellBack = true
+          pending.write(readBuf, 0, read)
+          while (pending.size() >= frameBytes) {
+            val chunk = pending.toByteArray()
+            val frame = chunk.copyOfRange(0, frameBytes)
+            val rest = chunk.copyOfRange(frameBytes, chunk.size)
+            pending.reset()
+            if (rest.isNotEmpty()) pending.write(rest)
+
+            if (!processAndAppend(direct, frame, frameBytes, record)) {
+              break
             }
           }
-          // Persist the full processed frame (padding zeros are intentional for DFN alignment)
-          val out = ByteArray(direct.remaining())
-          direct.get(out)
-          synchronized(pcm) { pcm.write(out) }
+        } else if (read < 0) {
+          Log.w(TAG, "AudioRecord.read error=$read")
+          break
         }
+      }
+
+      // Flush trailing partial frame only for non-DFN modes (pad). DFN needs full frames.
+      if (recording.get().not() && pending.size() > 0 && activeMode != DenoiseMode.DEEPFILTERNET) {
+        val tail = pending.toByteArray()
+        val padded = ByteArray(frameBytes)
+        System.arraycopy(tail, 0, padded, 0, tail.size.coerceAtMost(frameBytes))
+        processAndAppend(direct, padded, frameBytes, record)
       }
     }
     return activeMode
   }
 
+  private fun processAndAppend(
+    direct: ByteBuffer,
+    frame: ByteArray,
+    frameBytes: Int,
+    record: AudioRecord,
+  ): Boolean {
+    direct.clear()
+    direct.put(frame, 0, frameBytes)
+    direct.flip()
+
+    val ok = processor?.processFrame(direct) ?: true
+    if (!ok && processor?.mode == DenoiseMode.DEEPFILTERNET) {
+      Log.w(TAG, "DeepFilterNet failed mid-session — switching to NoiseSuppressor")
+      processor?.release()
+      val ns = AndroidNoiseSuppressorProcessor()
+      if (ns.initialize(record.audioSessionId)) {
+        processor = ns
+        activeMode = DenoiseMode.ANDROID_NS
+        fellBack = true
+      } else {
+        processor = PassthroughProcessor()
+        activeMode = DenoiseMode.OFF
+        fellBack = true
+      }
+      // Re-process this frame with the fallback (passthrough / NS session path)
+      direct.rewind()
+      processor?.processFrame(direct)
+    }
+
+    // Ensure we can read the full processed frame (DFN processFrame may leave position at end)
+    direct.rewind()
+    val out = ByteArray(direct.remaining())
+    direct.get(out)
+    synchronized(pcm) { pcm.write(out) }
+    return true
+  }
+
   fun stop(): Result {
     recording.set(false)
     try {
-      recordingThread?.join(1500)
+      recordingThread?.join(2000)
     } catch (_: InterruptedException) {
     }
     recordingThread = null
@@ -135,6 +177,7 @@ class VoiceRecorder(private val context: Context) {
         val dfn = DeepFilterNetProcessor(context)
         if (dfn.initialize(sessionId)) return dfn
         fellBack = true
+        Log.w(TAG, "DeepFilterNet unavailable — falling back to NoiseSuppressor")
         val ns = AndroidNoiseSuppressorProcessor()
         if (ns.initialize(sessionId)) return ns
         return PassthroughProcessor()

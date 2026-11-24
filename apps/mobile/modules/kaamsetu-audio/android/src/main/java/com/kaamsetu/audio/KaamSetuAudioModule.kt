@@ -10,7 +10,13 @@ class KaamSetuAudioModule : Module() {
     Name("KaamSetuAudio")
 
     Function("isAvailable") {
-      true
+      // True when Kaleyra JNI class is on the classpath (bundled AAR linked into Dev Client)
+      try {
+        Class.forName("com.rikorose.deepfilternet.NativeDeepFilterNet")
+        true
+      } catch (_: Throwable) {
+        false
+      }
     }
 
     Function("getActiveMode") {
