@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Alert, Pressable, Text, View } from 'react-native';
-import { api } from '../api/client';
+import { ApiError, api } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
 import { Field, PrimaryButton, Screen, Subtitle, Title, useThemeColors } from '../components/ui';
 
@@ -38,8 +38,15 @@ export function OnboardingScreen() {
             method: 'POST',
             body: JSON.stringify({ code: projectCode.trim() }),
           });
-        } catch {
-          // already a member / auto-joined on register — OK
+        } catch (err) {
+          // 409 = already a member — OK; anything else warn the user
+          if (!(err instanceof ApiError) || err.status !== 409) {
+            Alert.alert(
+              'Project join failed',
+              (err as Error).message ||
+                'Could not join that project code. Check the code and try again from Profile later.',
+            );
+          }
         }
       }
       await refreshRealtime();

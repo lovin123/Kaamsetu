@@ -63,6 +63,8 @@ model User {
   role               Role
   preferredLanguage  String   @default("hi-IN")
   fcmToken           String?
+  /** bcrypt hash of the currently valid refresh token (rotation / logout) */
+  refreshTokenHash   String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 

@@ -1,6 +1,10 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, UseGuards } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Role } from '@prisma/client';
 import { FcmProvider } from './providers/fcm.provider';
+import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { RolesGuard } from './common/roles.guard';
+import { Roles } from './common/decorators';
 
 @Controller('health')
 export class HealthController {
@@ -11,10 +15,17 @@ export class HealthController {
 
   @Get()
   check() {
-    return { status: 'ok', service: 'kaamsetu-api', ts: new Date().toISOString() };
+    return {
+      status: 'ok',
+      service: 'kaamsetu-api',
+      ts: new Date().toISOString(),
+    };
   }
 
+  /** Supervisor-only — do not expose provider config publicly. */
   @Get('providers')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.SUPERVISOR)
   providers() {
     const sarvam = Boolean(this.config.get('SARVAM_API_KEY'));
     const xai = Boolean(this.config.get('XAI_API_KEY'));

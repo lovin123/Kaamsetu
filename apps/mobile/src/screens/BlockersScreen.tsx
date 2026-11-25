@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { Alert, FlatList, Text, View } from 'react-native';
+import { Alert, FlatList, RefreshControl, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { api } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
@@ -34,7 +34,7 @@ export function BlockersScreen() {
     }
   };
 
-  if (loading) return <Loader />;
+  if (loading && items.length === 0) return <Loader />;
 
   return (
     <Screen>
@@ -46,6 +46,7 @@ export function BlockersScreen() {
       <FlatList
         data={items}
         keyExtractor={(i) => i.id}
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}
         renderItem={({ item }) => (
           <Card>
             <Text style={{ color: c.ink, fontWeight: '700' }}>{item.task?.title}</Text>

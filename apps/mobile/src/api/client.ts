@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 import { API_BASE_URL } from '../config';
 
 const TOKEN_KEY = 'kaamsetu_token';
@@ -21,8 +22,73 @@ export class ApiError extends Error {
   }
 }
 
-async function getToken() {
-  return AsyncStorage.getItem(TOKEN_KEY);
+export class SessionExpiredError extends Error {
+  constructor(message = 'Session expired') {
+    super(message);
+    this.name = 'SessionExpiredError';
+  }
+}
+
+type SessionListener = () => void;
+const sessionListeners = new Set<SessionListener>();
+
+export function onSessionExpired(listener: SessionListener) {
+  sessionListeners.add(listener);
+  return () => {
+    sessionListeners.delete(listener);
+  };
+}
+
+function emitSessionExpired() {
+  for (const listener of sessionListeners) {
+    try {
+      listener();
+    } catch {
+      // ignore listener errors
+    }
+  }
+}
+
+async function getSecure(key: string): Promise<string | null> {
+  try {
+    const secure = await SecureStore.getItemAsync(key);
+    if (secure) return secure;
+  } catch {
+    // SecureStore unavailable (web/tests) — fall through
+  }
+  // Migrate legacy AsyncStorage tokens once
+  const legacy = await AsyncStorage.getItem(key);
+  if (legacy) {
+    try {
+      await SecureStore.setItemAsync(key, legacy);
+      await AsyncStorage.removeItem(key);
+    } catch {
+      // keep legacy if SecureStore write fails
+    }
+  }
+  return legacy;
+}
+
+async function setSecure(key: string, value: string) {
+  try {
+    await SecureStore.setItemAsync(key, value);
+    await AsyncStorage.removeItem(key);
+  } catch {
+    await AsyncStorage.setItem(key, value);
+  }
+}
+
+async function deleteSecure(key: string) {
+  try {
+    await SecureStore.deleteItemAsync(key);
+  } catch {
+    // ignore
+  }
+  await AsyncStorage.removeItem(key);
+}
+
+export async function getAccessToken() {
+  return getSecure(TOKEN_KEY);
 }
 
 export async function setSession(
@@ -30,12 +96,9 @@ export async function setSession(
   user: User,
   refreshToken?: string,
 ) {
-  const pairs: [string, string][] = [
-    [TOKEN_KEY, token],
-    [USER_KEY, JSON.stringify(user)],
-  ];
-  if (refreshToken) pairs.push([REFRESH_KEY, refreshToken]);
-  await AsyncStorage.multiSet(pairs);
+  await setSecure(TOKEN_KEY, token);
+  await AsyncStorage.setItem(USER_KEY, JSON.stringify(user));
+  if (refreshToken) await setSecure(REFRESH_KEY, refreshToken);
 }
 
 export async function updateStoredUser(user: User) {
@@ -43,7 +106,9 @@ export async function updateStoredUser(user: User) {
 }
 
 export async function clearSession() {
-  await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY, REFRESH_KEY]);
+  await deleteSecure(TOKEN_KEY);
+  await deleteSecure(REFRESH_KEY);
+  await AsyncStorage.removeItem(USER_KEY);
 }
 
 export async function getStoredUser(): Promise<User | null> {
@@ -51,28 +116,50 @@ export async function getStoredUser(): Promise<User | null> {
   return raw ? (JSON.parse(raw) as User) : null;
 }
 
-async function refreshAccessToken(): Promise<string | null> {
-  const refreshToken = await AsyncStorage.getItem(REFRESH_KEY);
+let refreshPromise: Promise<string | null> | null = null;
+
+async function doRefreshAccessToken(): Promise<string | null> {
+  const refreshToken = await getSecure(REFRESH_KEY);
   if (!refreshToken) {
     await clearSession();
+    emitSessionExpired();
     return null;
   }
-  const res = await fetch(`${API_BASE_URL}/auth/refresh`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refreshToken }),
-  });
-  if (!res.ok) {
-    await clearSession();
+  try {
+    const res = await fetch(`${API_BASE_URL}/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken }),
+    });
+    if (!res.ok) {
+      await clearSession();
+      emitSessionExpired();
+      return null;
+    }
+    const data = (await res.json()) as {
+      accessToken: string;
+      refreshToken?: string;
+      user: User;
+    };
+    await setSession(
+      data.accessToken,
+      data.user,
+      data.refreshToken ?? refreshToken,
+    );
+    return data.accessToken;
+  } catch {
+    // Network failure during refresh — keep existing session for offline use
     return null;
   }
-  const data = (await res.json()) as {
-    accessToken: string;
-    refreshToken?: string;
-    user: User;
-  };
-  await setSession(data.accessToken, data.user, data.refreshToken ?? refreshToken);
-  return data.accessToken;
+}
+
+async function refreshAccessToken(): Promise<string | null> {
+  if (!refreshPromise) {
+    refreshPromise = doRefreshAccessToken().finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
 }
 
 export async function api<T>(
@@ -86,7 +173,7 @@ export async function api<T>(
     headers['Content-Type'] = headers['Content-Type'] ?? 'application/json';
   }
   if (options.auth !== false) {
-    const token = await getToken();
+    const token = await getAccessToken();
     if (token) headers.Authorization = `Bearer ${token}`;
   }
 
@@ -97,6 +184,10 @@ export async function api<T>(
     if (next) {
       headers.Authorization = `Bearer ${next}`;
       res = await fetch(`${API_BASE_URL}${path}`, { ...options, headers });
+    } else {
+      // Refresh failed or session cleared — surface as auth error
+      const text = await res.text().catch(() => '');
+      throw new ApiError(401, text || 'Unauthorized');
     }
   }
 
@@ -109,12 +200,19 @@ export async function api<T>(
 }
 
 export function isNetworkError(err: unknown) {
+  if (err instanceof TypeError) return true;
   const msg = (err as Error)?.message?.toLowerCase?.() ?? '';
   return (
     msg.includes('network') ||
     msg.includes('failed to fetch') ||
     msg.includes('timeout') ||
-    msg.includes('offline')
+    msg.includes('offline') ||
+    msg.includes('connection') ||
+    msg.includes('econnrefused') ||
+    msg.includes('etimedout') ||
+    msg.includes('unable to resolve') ||
+    msg.includes('socket') ||
+    msg.includes('network request failed')
   );
 }
 

@@ -9,13 +9,17 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
-import { IsBoolean, IsOptional, IsString, IsUUID } from 'class-validator';
+import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 import { VoiceService } from './voice.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AuthUser, CurrentUser } from '../common/decorators';
 
+const AUDIO_MIME =
+  /^(audio\/(wav|wave|x-wav|mpeg|mp3|mp4|m4a|x-m4a|aac|ogg|webm|flac)|application\/octet-stream)$/i;
+
 class TranscriptDto {
   @IsString()
+  @MaxLength(4000)
   transcript!: string;
 
   @IsOptional()
@@ -28,11 +32,8 @@ class TranscriptDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(128)
   idempotencyKey?: string;
-
-  @IsOptional()
-  @IsBoolean()
-  confirmed?: boolean;
 }
 
 class ConfirmDto {
@@ -50,6 +51,18 @@ export class VoiceController {
     FileInterceptor('audio', {
       storage: memoryStorage(),
       limits: { fileSize: 15 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        if (!file.mimetype || !AUDIO_MIME.test(file.mimetype)) {
+          cb(
+            new BadRequestException(
+              'Invalid audio type — use wav/mp3/m4a/ogg/webm',
+            ) as any,
+            false,
+          );
+          return;
+        }
+        cb(null, true);
+      },
     }),
   )
   async audio(
@@ -60,7 +73,6 @@ export class VoiceController {
       projectId?: string;
       conversationId?: string;
       idempotencyKey?: string;
-      confirmed?: string;
     },
   ) {
     if (!file?.buffer?.length) {
@@ -74,7 +86,6 @@ export class VoiceController {
       projectId: body.projectId,
       conversationId: body.conversationId,
       idempotencyKey: body.idempotencyKey,
-      confirmed: body.confirmed === 'true' || body.confirmed === '1',
     });
   }
 
@@ -86,7 +97,6 @@ export class VoiceController {
       projectId: dto.projectId,
       conversationId: dto.conversationId,
       idempotencyKey: dto.idempotencyKey,
-      confirmed: dto.confirmed,
     });
   }
 

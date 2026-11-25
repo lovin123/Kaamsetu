@@ -1,10 +1,20 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, ScrollView } from 'react-native';
+import { Alert, Pressable, ScrollView, Text } from 'react-native';
 import { api, isNetworkError } from '../api/client';
-import { Field, PrimaryButton, Screen, Subtitle, Title } from '../components/ui';
+import { ProjectPicker } from '../components/ProjectPicker';
+import {
+  Field,
+  PrimaryButton,
+  Screen,
+  Subtitle,
+  Title,
+  useThemeColors,
+} from '../components/ui';
 import { enqueueMutation } from '../offline/queue';
 
 export function CreateBlockerScreen({ navigation }: any) {
+  const c = useThemeColors();
+  const [projects, setProjects] = useState<any[]>([]);
   const [projectId, setProjectId] = useState('');
   const [tasks, setTasks] = useState<any[]>([]);
   const [taskId, setTaskId] = useState('');
@@ -13,14 +23,23 @@ export function CreateBlockerScreen({ navigation }: any) {
 
   useEffect(() => {
     (async () => {
-      const projects = await api<any[]>('/projects');
-      const pid = projects[0]?.id || '';
+      const list = await api<any[]>('/projects');
+      setProjects(list);
+      const pid = list[0]?.id || '';
       setProjectId(pid);
-      const list = await api<any[]>('/tasks');
-      setTasks(list);
-      setTaskId(list[0]?.id || '');
+      const taskList = await api<any[]>('/tasks');
+      setTasks(taskList);
+      setTaskId(taskList[0]?.id || '');
     })().catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    if (!projectId) return;
+    const filtered = tasks.filter((t) => !t.projectId || t.projectId === projectId);
+    if (filtered.length && !filtered.find((t) => t.id === taskId)) {
+      setTaskId(filtered[0].id);
+    }
+  }, [projectId, tasks, taskId]);
 
   const submit = async () => {
     if (!projectId || !taskId || !reason.trim()) {
@@ -51,19 +70,36 @@ export function CreateBlockerScreen({ navigation }: any) {
     }
   };
 
+  const visibleTasks = tasks.filter((t) => !t.projectId || t.projectId === projectId);
+
   return (
     <Screen>
       <ScrollView>
         <Title>Report blocker</Title>
-        <Subtitle>
-          Task: {tasks.find((t) => t.id === taskId)?.title || 'Loading…'}
-        </Subtitle>
-        <Field
-          label="Switch task id (optional)"
-          value={taskId}
-          onChangeText={setTaskId}
-          placeholder="task uuid"
-        />
+        <Subtitle>Pick the blocked task and describe why work stopped</Subtitle>
+        <ProjectPicker projects={projects} value={projectId} onChange={setProjectId} />
+        <Text style={{ color: c.muted, fontWeight: '600', marginBottom: 4 }}>Task</Text>
+        {visibleTasks.map((t) => {
+          const selected = t.id === taskId;
+          return (
+            <Pressable
+              key={t.id}
+              onPress={() => setTaskId(t.id)}
+              style={{
+                padding: 12,
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: selected ? c.accent : c.border,
+                backgroundColor: selected ? c.accentSoft : c.surface,
+                marginBottom: 8,
+              }}
+            >
+              <Text style={{ color: c.ink, fontWeight: selected ? '800' : '600' }}>
+                {t.title}
+              </Text>
+            </Pressable>
+          );
+        })}
         <Field
           label="Reason"
           value={reason}

@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -34,7 +35,10 @@ export class TasksController {
   }
 
   @Get(':id')
-  get(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+  get(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.tasks.getOne(id, user.id, user.role);
   }
 
@@ -47,7 +51,7 @@ export class TasksController {
   @Patch(':id/assign')
   @Roles(Role.SUPERVISOR)
   assign(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AssignTaskDto,
     @CurrentUser() user: AuthUser,
   ) {
@@ -56,7 +60,7 @@ export class TasksController {
 
   @Patch(':id/progress')
   progress(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
     @Body() dto: UpdateProgressDto,
   ) {
@@ -66,7 +70,7 @@ export class TasksController {
   @Patch(':id/status')
   @Roles(Role.SUPERVISOR)
   status(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateTaskStatusDto,
     @CurrentUser() user: AuthUser,
   ) {

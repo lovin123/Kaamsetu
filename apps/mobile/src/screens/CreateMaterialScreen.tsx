@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, ScrollView } from 'react-native';
 import { api, isNetworkError } from '../api/client';
+import { ProjectPicker } from '../components/ProjectPicker';
 import { Field, PrimaryButton, Screen, Subtitle, Title } from '../components/ui';
 import { enqueueMutation } from '../offline/queue';
 
 export function CreateMaterialScreen({ navigation }: any) {
+  const [projects, setProjects] = useState<any[]>([]);
   const [projectId, setProjectId] = useState('');
   const [materialName, setMaterialName] = useState('');
   const [quantity, setQuantity] = useState('');
@@ -12,7 +14,12 @@ export function CreateMaterialScreen({ navigation }: any) {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    api<any[]>('/projects').then((p) => setProjectId(p[0]?.id || ''));
+    api<any[]>('/projects')
+      .then((p) => {
+        setProjects(p);
+        setProjectId(p[0]?.id || '');
+      })
+      .catch(() => undefined);
   }, []);
 
   const submit = async () => {
@@ -51,6 +58,7 @@ export function CreateMaterialScreen({ navigation }: any) {
       <ScrollView>
         <Title>Request materials</Title>
         <Subtitle>Or ask KaamSetu by voice</Subtitle>
+        <ProjectPicker projects={projects} value={projectId} onChange={setProjectId} />
         <Field
           label="Material"
           value={materialName}

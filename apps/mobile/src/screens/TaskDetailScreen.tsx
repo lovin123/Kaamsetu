@@ -34,8 +34,10 @@ export function TaskDetailScreen({ route }: any) {
         body: JSON.stringify(body),
       });
       Alert.alert('Saved', 'Progress updated');
-      const refreshed = await api(`/tasks/${taskId}`);
+      const refreshed = await api<any>(`/tasks/${taskId}`);
       setTask(refreshed);
+      setPercent(String(refreshed.progressPercent ?? 0));
+      setNotes('');
     } catch (err) {
       if (isNetworkError(err)) {
         await enqueueMutation(`/tasks/${taskId}/progress`, 'PATCH', body);

@@ -1,4 +1,11 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
+import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   User,
@@ -6,10 +13,11 @@ import {
   clearSession,
   getStoredUser,
   login as apiLogin,
+  onSessionExpired,
   register as apiRegister,
   updateStoredUser,
 } from '../api/client';
-import { clearQueue, flushQueue } from '../offline/queue';
+import { clearQueue, flushQueue, pendingCount } from '../offline/queue';
 import { connectRealtime, disconnectRealtime } from '../realtime/socket';
 import { registerPushToken } from '../notifications/push';
 
@@ -68,6 +76,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
+  // When refresh fails / tokens cleared, force login UI
+  useEffect(() => {
+    return onSessionExpired(() => {
+      setUser(null);
+      setOnboarded(false);
+      disconnectRealtime();
+    });
+  }, []);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       user,
@@ -103,6 +120,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         registerPushToken().catch(() => undefined);
       },
       logout: async () => {
+        const pending = await pendingCount();
+        if (pending > 0) {
+          const discard = await new Promise<boolean>((resolve) => {
+            Alert.alert(
+              'Unsynced updates',
+              `You have ${pending} offline update(s). Logging out discards them.`,
+              [
+                { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+                {
+                  text: 'Discard & sign out',
+                  style: 'destructive',
+                  onPress: () => resolve(true),
+                },
+              ],
+            );
+          });
+          if (!discard) return;
+        }
+        // Revoke server refresh token (best-effort)
+        await api('/auth/logout', { method: 'POST', body: '{}' }).catch(
+          () => undefined,
+        );
         disconnectRealtime();
         await clearQueue();
         await clearSession();

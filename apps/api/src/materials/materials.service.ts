@@ -1,6 +1,14 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Role } from '@prisma/client';
-import { IsNumber, IsOptional, IsString, IsUUID, Min } from 'class-validator';
+import {
+  IsIn,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+  Min,
+} from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
@@ -15,6 +23,7 @@ export class CreateMaterialRequestDto {
   taskId?: string;
 
   @IsString()
+  @MaxLength(200)
   materialName!: string;
 
   @IsNumber()
@@ -22,18 +31,21 @@ export class CreateMaterialRequestDto {
   quantity!: number;
 
   @IsString()
+  @MaxLength(40)
   unit!: string;
 
   @IsOptional()
-  @IsString()
+  @IsIn(['normal', 'urgent'])
   urgency?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(1000)
   notes?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(4000)
   transcript?: string;
 }
 

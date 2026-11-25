@@ -12,7 +12,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system';
 import type { DenoiseMode } from '@kaamsetu/shared';
-import { api, isNetworkError } from '../api/client';
+import { ApiError, api, isNetworkError } from '../api/client';
 import { KaamSetuAudio } from '../native/KaamSetuAudio';
 import {
   Card,
@@ -39,6 +39,8 @@ export function VoiceScreen() {
   const [projectId, setProjectId] = useState<string | undefined>();
   const [conversationId, setConversationId] = useState<string | undefined>();
   const recordingRef = useRef<Audio.Recording | null>(null);
+  const soundRef = useRef<Audio.Sound | null>(null);
+  const idempotencyRef = useRef(`voice-${Date.now()}`);
   const native = KaamSetuAudio.isNativeAvailable();
 
   useEffect(() => {
@@ -55,6 +57,14 @@ export function VoiceScreen() {
         setDfnReady(await KaamSetuAudio.isAvailable());
       }
     })();
+    return () => {
+      soundRef.current?.unloadAsync().catch(() => undefined);
+      soundRef.current = null;
+      if (recordingRef.current) {
+        recordingRef.current.stopAndUnloadAsync().catch(() => undefined);
+        recordingRef.current = null;
+      }
+    };
   }, [native]);
 
   const rememberConversation = async (id?: string) => {
@@ -63,26 +73,45 @@ export function VoiceScreen() {
     await AsyncStorage.setItem(CONV_KEY, id);
   };
 
+  const clearConversation = async () => {
+    setConversationId(undefined);
+    await AsyncStorage.removeItem(CONV_KEY);
+  };
+
   const cycleMode = () => {
-    // Android always offers DeepFilterNet first; NS/off remain for debugging.
     const order: DenoiseMode[] = ['deepfilternet', 'android_ns', 'off'];
     const next = order[(order.indexOf(mode) + 1) % order.length];
     setMode(next);
   };
 
   const playTts = async (base64: string) => {
+    try {
+      await soundRef.current?.unloadAsync();
+    } catch {
+      // ignore
+    }
+    soundRef.current = null;
     const path = `${FileSystem.cacheDirectory}reply-${Date.now()}.wav`;
     await FileSystem.writeAsStringAsync(path, base64, {
       encoding: FileSystem.EncodingType.Base64,
     });
     const { sound } = await Audio.Sound.createAsync({ uri: path });
+    soundRef.current = sound;
+    sound.setOnPlaybackStatusUpdate((status) => {
+      if (status.isLoaded && status.didJustFinish) {
+        sound.unloadAsync().catch(() => undefined);
+        if (soundRef.current === sound) soundRef.current = null;
+        FileSystem.deleteAsync(path, { idempotent: true }).catch(() => undefined);
+      }
+    });
     await sound.playAsync();
   };
 
-  const start = async () => {
+  const startRecordingFlow = async () => {
     setTranscript('');
     setReply('');
     setActionId(null);
+    idempotencyRef.current = `voice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     try {
       const permission = await Audio.requestPermissionsAsync();
       if (!permission.granted) {
@@ -90,7 +119,6 @@ export function VoiceScreen() {
         return;
       }
 
-      // Android: kaamsetu-audio only — never silent expo-av (no denoise).
       if (Platform.OS === 'android') {
         if (mode === 'deepfilternet') {
           await KaamSetuAudio.assertDeepFilterNetReady();
@@ -112,7 +140,11 @@ export function VoiceScreen() {
         return;
       }
 
-      // iOS: DeepFilterNet is Android-only; use expo-av.
+      // iOS: stop any lingering recording first
+      if (recordingRef.current) {
+        await recordingRef.current.stopAndUnloadAsync().catch(() => undefined);
+        recordingRef.current = null;
+      }
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
@@ -127,7 +159,49 @@ export function VoiceScreen() {
       setState('recording');
     } catch (err) {
       Alert.alert('Record failed', (err as Error).message);
+      setState('idle');
     }
+  };
+
+  const start = async () => {
+    if (state === 'confirm' && actionId) {
+      Alert.alert(
+        'Pending confirmation',
+        'Confirm or discard the current voice action before recording again.',
+        [
+          { text: 'Keep waiting', style: 'cancel' },
+          {
+            text: 'Discard & record',
+            style: 'destructive',
+            onPress: () => {
+              setActionId(null);
+              setState('idle');
+              startRecordingFlow();
+            },
+          },
+        ],
+      );
+      return;
+    }
+    await startRecordingFlow();
+  };
+
+  const postVoice = async (
+    uri: string,
+    uploadName: string,
+    uploadType: string,
+    convId?: string,
+  ) => {
+    const form = new FormData();
+    form.append('audio', {
+      uri,
+      name: uploadName,
+      type: uploadType,
+    } as any);
+    if (projectId) form.append('projectId', projectId);
+    if (convId) form.append('conversationId', convId);
+    form.append('idempotencyKey', idempotencyRef.current);
+    return api<any>('/voice/audio', { method: 'POST', body: form });
   };
 
   const stopAndSend = async () => {
@@ -147,28 +221,34 @@ export function VoiceScreen() {
       } else {
         const recording = recordingRef.current;
         if (!recording) throw new Error('No recording');
-        await recording.stopAndUnloadAsync();
-        uri = recording.getURI() || '';
-        recordingRef.current = null;
+        try {
+          await recording.stopAndUnloadAsync();
+          uri = recording.getURI() || '';
+        } finally {
+          recordingRef.current = null;
+        }
         uploadName = 'voice.m4a';
         uploadType = 'audio/m4a';
       }
       if (!uri) throw new Error('No audio file');
 
-      const form = new FormData();
-      form.append('audio', {
-        uri,
-        name: uploadName,
-        type: uploadType,
-      } as any);
-      if (projectId) form.append('projectId', projectId);
-      if (conversationId) form.append('conversationId', conversationId);
-      form.append('idempotencyKey', `voice-${Date.now()}`);
+      let result: any;
+      try {
+        result = await postVoice(uri, uploadName, uploadType, conversationId);
+      } catch (err) {
+        // Stale conversation → clear and retry once without it
+        if (
+          err instanceof ApiError &&
+          (err.status === 404 || err.status === 400) &&
+          conversationId
+        ) {
+          await clearConversation();
+          result = await postVoice(uri, uploadName, uploadType, undefined);
+        } else {
+          throw err;
+        }
+      }
 
-      const result = await api<any>('/voice/audio', {
-        method: 'POST',
-        body: form,
-      });
       setTranscript(result.transcript || '');
       setReply(result.replyText || '');
       await rememberConversation(result.conversationId);
@@ -244,6 +324,14 @@ export function VoiceScreen() {
                 : 'missing — run npm run android'}
           </Text>
         </Pressable>
+
+        {!!conversationId && (
+          <Pressable onPress={clearConversation} style={{ marginTop: 8 }}>
+            <Text style={{ color: c.muted, fontSize: 12 }}>
+              Conversation active · tap to start new
+            </Text>
+          </Pressable>
+        )}
 
         <View style={styles.micWrap}>
           <Pressable

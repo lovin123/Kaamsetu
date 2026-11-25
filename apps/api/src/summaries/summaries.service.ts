@@ -1,4 +1,9 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LLM_PROVIDER } from '../providers/provider.tokens';
@@ -36,6 +41,9 @@ export class SummariesService {
     if (!project) throw new NotFoundException('Project not found');
 
     const day = dateIso ? new Date(dateIso) : new Date();
+    if (Number.isNaN(day.getTime())) {
+      throw new BadRequestException('date must be a valid ISO 8601 date');
+    }
     const start = new Date(day);
     start.setHours(0, 0, 0, 0);
     const end = new Date(day);
@@ -43,26 +51,61 @@ export class SummariesService {
 
     const [tasks, incidents, materials, blockers, progressUpdates] =
       await Promise.all([
-        this.prisma.task.findMany({ where: { projectId } }),
+        this.prisma.task.findMany({
+          where: { projectId },
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            progressPercent: true,
+            location: true,
+          },
+          take: 100,
+        }),
         this.prisma.incident.findMany({
           where: { projectId, createdAt: { gte: start, lte: end } },
+          select: {
+            title: true,
+            category: true,
+            severity: true,
+            status: true,
+            location: true,
+          },
+          take: 50,
         }),
         this.prisma.materialRequest.findMany({
           where: { projectId, createdAt: { gte: start, lte: end } },
+          select: {
+            materialName: true,
+            quantity: true,
+            unit: true,
+            status: true,
+            urgency: true,
+          },
+          take: 50,
         }),
         this.prisma.blocker.findMany({
           where: { projectId, createdAt: { gte: start, lte: end } },
-          include: { task: { select: { title: true } } },
+          select: {
+            reason: true,
+            status: true,
+            category: true,
+            task: { select: { title: true } },
+          },
+          take: 50,
         }),
         this.prisma.taskProgress.findMany({
           where: {
             createdAt: { gte: start, lte: end },
             task: { projectId },
           },
-          include: {
+          select: {
+            progressPercent: true,
+            notes: true,
             task: { select: { title: true } },
             user: { select: { name: true } },
           },
+          take: 50,
         }),
       ]);
 

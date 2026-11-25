@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { api } from '../api/client';
+import { api, getStoredUser } from '../api/client';
 
 const QUEUE_KEY = 'kaamsetu_offline_queue';
 
@@ -82,46 +82,65 @@ export async function listQueue() {
   return readQueue();
 }
 
+export async function pendingCount() {
+  return (await readQueue()).length;
+}
+
 export async function clearQueue() {
   await writeQueue([]);
 }
 
+let flushing = false;
+
 export async function flushQueue() {
-  const items = await readQueue();
-  const remaining: QueuedMutation[] = [];
-  for (const item of items) {
-    try {
-      if (item.audioUri) {
-        const form = new FormData();
-        form.append('audio', {
-          uri: item.audioUri,
-          name: item.audioName ?? 'voice.m4a',
-          type: item.audioType ?? 'audio/m4a',
-        } as any);
-        if (item.idempotencyKey) {
-          form.append('idempotencyKey', item.idempotencyKey);
-        }
-        if (item.formFields) {
-          for (const [k, v] of Object.entries(item.formFields)) {
-            form.append(k, v);
+  if (flushing) return { synced: 0, remaining: 0, skipped: true as const };
+  const user = await getStoredUser();
+  if (!user) return { synced: 0, remaining: 0, skipped: true as const };
+
+  flushing = true;
+  try {
+    const items = await readQueue();
+    const remaining: QueuedMutation[] = [];
+    for (const item of items) {
+      try {
+        if (item.audioUri) {
+          const form = new FormData();
+          form.append('audio', {
+            uri: item.audioUri,
+            name: item.audioName ?? 'voice.m4a',
+            type: item.audioType ?? 'audio/m4a',
+          } as any);
+          if (item.idempotencyKey) {
+            form.append('idempotencyKey', item.idempotencyKey);
           }
+          if (item.formFields) {
+            for (const [k, v] of Object.entries(item.formFields)) {
+              form.append(k, v);
+            }
+          }
+          await api(item.path, { method: item.method, body: form });
+        } else {
+          // Do not inject idempotencyKey into JSON DTOs — most endpoints reject unknown fields
+          await api(item.path, {
+            method: item.method,
+            body: item.body !== undefined ? JSON.stringify(item.body) : undefined,
+          });
         }
-        await api(item.path, { method: item.method, body: form });
-      } else {
-        // Do not inject idempotencyKey into JSON DTOs — most endpoints reject unknown fields
-        await api(item.path, {
-          method: item.method,
-          body: item.body !== undefined ? JSON.stringify(item.body) : undefined,
+      } catch (err) {
+        remaining.push({
+          ...item,
+          status: 'failed',
+          lastError: (err as Error).message,
         });
       }
-    } catch (err) {
-      remaining.push({
-        ...item,
-        status: 'failed',
-        lastError: (err as Error).message,
-      });
     }
+    await writeQueue(remaining);
+    return {
+      synced: items.length - remaining.length,
+      remaining: remaining.length,
+      skipped: false as const,
+    };
+  } finally {
+    flushing = false;
   }
-  await writeQueue(remaining);
-  return { synced: items.length - remaining.length, remaining: remaining.length };
 }

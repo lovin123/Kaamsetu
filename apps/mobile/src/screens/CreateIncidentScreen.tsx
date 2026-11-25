@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, ScrollView } from 'react-native';
 import { api, isNetworkError } from '../api/client';
+import { ProjectPicker } from '../components/ProjectPicker';
 import { Field, PrimaryButton, Screen, Subtitle, Title } from '../components/ui';
 import { enqueueMutation } from '../offline/queue';
 
 export function CreateIncidentScreen({ navigation }: any) {
+  const [projects, setProjects] = useState<any[]>([]);
   const [projectId, setProjectId] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -13,7 +15,12 @@ export function CreateIncidentScreen({ navigation }: any) {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    api<any[]>('/projects').then((p) => setProjectId(p[0]?.id || ''));
+    api<any[]>('/projects')
+      .then((p) => {
+        setProjects(p);
+        setProjectId(p[0]?.id || '');
+      })
+      .catch(() => undefined);
   }, []);
 
   const submit = async () => {
@@ -52,6 +59,7 @@ export function CreateIncidentScreen({ navigation }: any) {
       <ScrollView>
         <Title>Report incident</Title>
         <Subtitle>Or use the mic tab to report by voice</Subtitle>
+        <ProjectPicker projects={projects} value={projectId} onChange={setProjectId} />
         <Field label="Title" value={title} onChangeText={setTitle} placeholder="Panel issue" />
         <Field
           label="Description"

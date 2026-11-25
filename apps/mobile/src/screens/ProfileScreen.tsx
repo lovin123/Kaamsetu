@@ -61,8 +61,12 @@ export function ProfileScreen() {
       <PrimaryButton label="Enable push notifications" onPress={registerPush} />
       <View style={{ height: 12 }} />
       <PrimaryButton label="Blockers" onPress={() => nav.navigate('Blockers')} />
-      <View style={{ height: 12 }} />
-      <PrimaryButton label="Audio denoise PoC" onPress={() => nav.navigate('AudioPoC')} />
+      {__DEV__ && (
+        <>
+          <View style={{ height: 12 }} />
+          <PrimaryButton label="Audio denoise PoC" onPress={() => nav.navigate('AudioPoC')} />
+        </>
+      )}
       <View style={{ height: 12 }} />
       <PrimaryButton label="Sign out" onPress={() => logout()} />
       <Text style={{ color: c.muted, marginTop: 16, fontSize: 12 }}>

@@ -4,8 +4,9 @@ import * as bcrypt from 'bcryptjs';
 const prisma = new PrismaClient();
 
 async function main() {
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('Refusing to run destructive seed in production');
+  const env = process.env.NODE_ENV ?? 'development';
+  if (!['development', 'test'].includes(env)) {
+    throw new Error(`Refusing to run destructive seed when NODE_ENV=${env}`);
   }
   await prisma.idempotencyRecord.deleteMany();
   await prisma.actionLog.deleteMany();

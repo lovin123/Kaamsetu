@@ -61,8 +61,6 @@ export class VoiceService {
     projectId?: string;
     conversationId?: string;
     idempotencyKey?: string;
-    confirmActionId?: string;
-    confirmed?: boolean;
   }) {
     if (params.idempotencyKey) {
       const existing = await this.findIdempotent(
@@ -93,8 +91,6 @@ export class VoiceService {
       conversationId: params.conversationId,
       audioUrl: uploaded?.url,
       idempotencyKey: params.idempotencyKey,
-      confirmActionId: params.confirmActionId,
-      confirmed: params.confirmed,
     });
   }
 
@@ -106,8 +102,6 @@ export class VoiceService {
     conversationId?: string;
     audioUrl?: string;
     idempotencyKey?: string;
-    confirmActionId?: string;
-    confirmed?: boolean;
   }) {
     if (params.idempotencyKey) {
       const existing = await this.findIdempotent(
@@ -121,7 +115,7 @@ export class VoiceService {
       where: { id: params.user.id },
     });
 
-    // Client cannot force-confirm via body — only /voice/confirm executes gated actions.
+    // Confirmation only via /voice/confirm — never from client body.
     const confirmed = false;
 
     let projectId = params.projectId;
@@ -179,6 +173,13 @@ export class VoiceService {
       }
       if (conversation.userId !== params.user.id) {
         throw new ForbiddenException('Conversation does not belong to user');
+      }
+      if (
+        conversation.projectId &&
+        projectId &&
+        conversation.projectId !== projectId
+      ) {
+        throw new BadRequestException('Conversation project mismatch');
       }
     } else {
       conversation = await this.prisma.conversation.create({
@@ -241,7 +242,9 @@ export class VoiceService {
       });
     } catch (err) {
       this.logger.error(`Intent extraction failed: ${(err as Error).message}`);
-      throw new ServiceUnavailableException((err as Error).message);
+      throw new ServiceUnavailableException(
+        'Voice processing unavailable — please try again',
+      );
     }
 
     const threshold = Number(
@@ -397,17 +400,35 @@ export class VoiceService {
     const intent = intentFields as VoiceIntent;
     const projectId = _projectId;
     if (!projectId) {
+      await this.prisma.actionLog.update({
+        where: { id: actionId },
+        data: { status: 'awaiting_confirmation', confirmed: false },
+      });
       throw new BadRequestException('Action is missing project context');
     }
-    const execution = await this.executeIntent(intent, user, projectId);
-    await this.prisma.actionLog.update({
-      where: { id: actionId },
-      data: {
-        status: 'executed',
-        confirmed: true,
-        result: execution as object,
-      },
-    });
+
+    let execution: { message: string; data?: unknown };
+    try {
+      execution = await this.executeIntent(intent, user, projectId);
+      await this.prisma.actionLog.update({
+        where: { id: actionId },
+        data: {
+          status: 'executed',
+          confirmed: true,
+          result: execution as object,
+        },
+      });
+    } catch (err) {
+      // Roll back claim so the user can retry /voice/confirm
+      await this.prisma.actionLog.update({
+        where: { id: actionId },
+        data: { status: 'awaiting_confirmation', confirmed: false },
+      });
+      this.logger.error(
+        `confirmAction execute failed actionId=${actionId}: ${(err as Error).message}`,
+      );
+      throw err;
+    }
 
     const fullUser = await this.prisma.user.findUniqueOrThrow({
       where: { id: user.id },

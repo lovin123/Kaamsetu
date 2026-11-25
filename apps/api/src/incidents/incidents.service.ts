@@ -4,7 +4,14 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { ProjectsService } from '../projects/projects.service';
-import { IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
+import {
+  IsEnum,
+  IsIn,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+} from 'class-validator';
 
 export class CreateIncidentDto {
   @IsUUID()
@@ -14,17 +21,27 @@ export class CreateIncidentDto {
   @IsUUID()
   taskId?: string;
 
-  @IsString()
+  @IsIn([
+    'electrical',
+    'plumbing',
+    'structural',
+    'safety',
+    'equipment',
+    'other',
+  ])
   category!: string;
 
   @IsString()
+  @MaxLength(200)
   title!: string;
 
   @IsString()
+  @MaxLength(2000)
   description!: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   location?: string;
 
   @IsOptional()
@@ -33,6 +50,7 @@ export class CreateIncidentDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(4000)
   transcript?: string;
 }
 

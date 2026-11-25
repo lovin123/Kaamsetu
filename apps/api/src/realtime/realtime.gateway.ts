@@ -10,8 +10,18 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { Role } from '@prisma/client';
 
+function resolveCorsOrigin(corsOrigin: string | undefined): true | string[] {
+  if (!corsOrigin || corsOrigin.trim() === '*') return true;
+  return corsOrigin.split(',').map((o) => o.trim()).filter(Boolean);
+}
+
 @WebSocketGateway({
-  cors: { origin: '*' },
+  cors: {
+    origin: resolveCorsOrigin(process.env.CORS_ORIGIN),
+    credentials: Boolean(
+      process.env.CORS_ORIGIN && process.env.CORS_ORIGIN.trim() !== '*',
+    ),
+  },
   namespace: '/realtime',
 })
 export class RealtimeGateway implements OnGatewayConnection {
@@ -68,7 +78,7 @@ export class RealtimeGateway implements OnGatewayConnection {
         for (const p of projects) client.join(`project:${p.id}`);
       } else {
         const memberships = await this.prisma.projectMember.findMany({
-          where: { userId: payload.sub },
+          where: { userId: payload.sub, project: { active: true } },
           select: { projectId: true },
         });
         for (const m of memberships) client.join(`project:${m.projectId}`);
@@ -88,10 +98,14 @@ export class RealtimeGateway implements OnGatewayConnection {
       const project = await this.prisma.project.findUnique({
         where: { id: projectId },
       });
-      return Boolean(project);
+      return Boolean(project?.active);
     }
-    const member = await this.prisma.projectMember.findUnique({
-      where: { projectId_userId: { projectId, userId } },
+    const member = await this.prisma.projectMember.findFirst({
+      where: {
+        projectId,
+        userId,
+        project: { active: true },
+      },
     });
     return Boolean(member);
   }

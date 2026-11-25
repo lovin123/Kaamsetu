@@ -7,8 +7,8 @@ export function LoginScreen() {
   const { login, register } = useAuth();
   const c = useThemeColors();
   const [mode, setMode] = useState<'login' | 'register'>('login');
-  const [phone, setPhone] = useState('9000000001');
-  const [password, setPassword] = useState('password123');
+  const [phone, setPhone] = useState(__DEV__ ? '9000000001' : '');
+  const [password, setPassword] = useState(__DEV__ ? 'password123' : '');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -78,9 +78,11 @@ export function LoginScreen() {
             {mode === 'login' ? 'New worker? Create account' : 'Have an account? Sign in'}
           </Text>
         </Pressable>
-        <Text style={{ color: c.muted, marginTop: 16, fontSize: 13 }}>
-          Demo: worker 9000000001 / supervisor 9000000009 — password123
-        </Text>
+        {__DEV__ && (
+          <Text style={{ color: c.muted, marginTop: 16, fontSize: 13 }}>
+            Demo: worker 9000000001 / supervisor 9000000009 — password123
+          </Text>
+        )}
       </View>
     </Screen>
   );

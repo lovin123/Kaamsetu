@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Text, View } from 'react-native';
 import type { DenoiseMode } from '@kaamsetu/shared';
 import { Audio } from 'expo-av';
@@ -13,8 +13,7 @@ import {
 } from '../components/ui';
 
 /**
- * DeepFilterNet proof-of-concept screen:
- * record with deepfilternet / android_ns / off and report active engine + fallback.
+ * DeepFilterNet proof-of-concept screen (dev builds).
  */
 export function AudioPoCScreen() {
   const c = useThemeColors();
@@ -22,6 +21,19 @@ export function AudioPoCScreen() {
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState('Ready');
   const native = KaamSetuAudio.isNativeAvailable();
+  const recordingActive = useRef(false);
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (recordingActive.current) {
+        KaamSetuAudio.stopRecording().catch(() => undefined);
+        recordingActive.current = false;
+      }
+    };
+  }, []);
 
   const cycle = () => {
     const order: DenoiseMode[] = ['deepfilternet', 'android_ns', 'off'];
@@ -39,19 +51,29 @@ export function AudioPoCScreen() {
         throw new Error('Native KaamSetuAudio missing — build with expo run:android');
       }
       const started = await KaamSetuAudio.startRecording(mode);
-      setLog(
-        `Recording with ${started.mode} @ ${started.sampleRate}Hz (DFN classpath=${started.deepFilterNetOnClasspath})… speak for ~3s`,
-      );
+      recordingActive.current = true;
+      if (mounted.current) {
+        setLog(
+          `Recording with ${started.mode} @ ${started.sampleRate}Hz (DFN classpath=${started.deepFilterNetOnClasspath})… speak for ~3s`,
+        );
+      }
       await new Promise((r) => setTimeout(r, 3000));
+      if (!recordingActive.current) return;
       const stopped = await KaamSetuAudio.stopRecording();
-      setLog(
-        `Saved ${stopped.uri}\nmodeUsed=${stopped.modeUsed}\nfellBack=${stopped.fellBack}\ndurationMs=${stopped.durationMs}`,
-      );
+      recordingActive.current = false;
+      if (mounted.current) {
+        setLog(
+          `Saved ${stopped.uri}\nmodeUsed=${stopped.modeUsed}\nfellBack=${stopped.fellBack}\ndurationMs=${stopped.durationMs}`,
+        );
+      }
     } catch (err) {
-      Alert.alert('PoC failed', (err as Error).message);
-      setLog((err as Error).message);
+      recordingActive.current = false;
+      if (mounted.current) {
+        Alert.alert('PoC failed', (err as Error).message);
+        setLog((err as Error).message);
+      }
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   };
 

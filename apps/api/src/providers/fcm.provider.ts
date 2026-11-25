@@ -55,7 +55,6 @@ export class FcmProvider implements OnModuleInit {
     const candidates = [
       configured,
       path.join(process.cwd(), 'secrets', 'firebase-adminsdk.json'),
-      path.join(__dirname, '..', '..', 'secrets', 'firebase-adminsdk.json'),
     ].filter(Boolean) as string[];
 
     for (const candidate of candidates) {

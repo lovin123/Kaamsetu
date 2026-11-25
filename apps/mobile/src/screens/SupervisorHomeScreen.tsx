@@ -29,15 +29,23 @@ export function SupervisorHomeScreen() {
       const s = getSocket();
       setLiveHint(s?.connected ? 'Live updates on' : 'Live updates offline');
       const onProgress = () => load();
+      const onConnect = () => setLiveHint('Live updates on');
+      const onDisconnect = () => setLiveHint('Live updates offline');
       s?.on('task.progress', onProgress);
       s?.on('incident.created', onProgress);
       s?.on('material.created', onProgress);
       s?.on('blocker.created', onProgress);
+      s?.on('connect', onConnect);
+      s?.on('disconnect', onDisconnect);
       return () => {
-        s?.off('task.progress', onProgress);
-        s?.off('incident.created', onProgress);
-        s?.off('material.created', onProgress);
-        s?.off('blocker.created', onProgress);
+        // Re-fetch socket — connectRealtime may have replaced the instance
+        const current = getSocket();
+        current?.off('task.progress', onProgress);
+        current?.off('incident.created', onProgress);
+        current?.off('material.created', onProgress);
+        current?.off('blocker.created', onProgress);
+        current?.off('connect', onConnect);
+        current?.off('disconnect', onDisconnect);
       };
     }, [load]),
   );

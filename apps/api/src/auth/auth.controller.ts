@@ -1,12 +1,8 @@
-import { Body, Controller, Post } from '@nestjs/common';
-import { IsString } from 'class-validator';
+import { Body, Controller, Post, UseGuards } from '@nestjs/common';
 import { AuthService } from './auth.service';
-import { LoginDto, RegisterDto } from './dto';
-
-class RefreshDto {
-  @IsString()
-  refreshToken!: string;
-}
+import { LoginDto, RefreshDto, RegisterDto } from './dto';
+import { JwtAuthGuard } from './jwt-auth.guard';
+import { AuthUser, CurrentUser } from '../common/decorators';
 
 @Controller('auth')
 export class AuthController {
@@ -25,5 +21,11 @@ export class AuthController {
   @Post('refresh')
   refresh(@Body() dto: RefreshDto) {
     return this.auth.refresh(dto.refreshToken);
+  }
+
+  @Post('logout')
+  @UseGuards(JwtAuthGuard)
+  logout(@CurrentUser() user: AuthUser) {
+    return this.auth.logout(user.id);
   }
 }

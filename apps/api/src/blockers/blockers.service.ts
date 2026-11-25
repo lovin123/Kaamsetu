@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Role, TaskStatus } from '@prisma/client';
-import { IsOptional, IsString, IsUUID } from 'class-validator';
+import { BlockerStatus, Role, TaskStatus } from '@prisma/client';
+import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
@@ -14,14 +14,17 @@ export class CreateBlockerDto {
   taskId!: string;
 
   @IsString()
+  @MaxLength(1000)
   reason!: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(80)
   category?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(4000)
   transcript?: string;
 }
 
@@ -98,16 +101,16 @@ export class BlockersService {
     await this.projects.assertAccess(existing.projectId, userId, role);
     const blocker = await this.prisma.blocker.update({
       where: { id },
-      data: { status: 'resolved' },
+      data: { status: BlockerStatus.resolved },
       include: { task: true },
     });
     const open = await this.prisma.blocker.count({
-      where: { taskId: blocker.taskId, status: 'open' },
+      where: { taskId: blocker.taskId, status: BlockerStatus.open },
     });
     if (open === 0) {
       await this.prisma.task.update({
         where: { id: blocker.taskId },
-        data: { status: 'in_progress' },
+        data: { status: TaskStatus.in_progress },
       });
     }
     return blocker;

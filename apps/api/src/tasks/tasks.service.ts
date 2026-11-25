@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -129,12 +130,10 @@ export class TasksService {
     dto: UpdateProgressDto,
   ) {
     const task = await this.getOne(taskId, userId, role);
-    const openBlockers =
-      task.status === TaskStatus.blocked
-        ? await this.prisma.blocker.count({
-            where: { taskId, status: 'open' },
-          })
-        : 0;
+    // Always count open blockers — do not rely on current status alone
+    const openBlockers = await this.prisma.blocker.count({
+      where: { taskId, status: 'open' },
+    });
     let status = task.status;
     if (openBlockers > 0) {
       status = TaskStatus.blocked;
@@ -195,7 +194,64 @@ export class TasksService {
     const existing = await this.prisma.task.findUnique({ where: { id: taskId } });
     if (!existing) throw new NotFoundException('Task not found');
     await this.projects.assertAccess(existing.projectId, actorId, role);
-    return this.prisma.task.update({ where: { id: taskId }, data: { status } });
+
+    const allowed: Record<TaskStatus, TaskStatus[]> = {
+      [TaskStatus.pending]: [
+        TaskStatus.in_progress,
+        TaskStatus.blocked,
+        TaskStatus.completed,
+      ],
+      [TaskStatus.in_progress]: [
+        TaskStatus.pending,
+        TaskStatus.blocked,
+        TaskStatus.completed,
+      ],
+      [TaskStatus.blocked]: [
+        TaskStatus.in_progress,
+        TaskStatus.pending,
+        TaskStatus.completed,
+      ],
+      [TaskStatus.completed]: [
+        TaskStatus.in_progress,
+        TaskStatus.pending,
+      ],
+    };
+    if (
+      existing.status !== status &&
+      !allowed[existing.status]?.includes(status)
+    ) {
+      throw new BadRequestException(
+        `Cannot transition task from ${existing.status} to ${status}`,
+      );
+    }
+
+    const [updated] = await this.prisma.$transaction([
+      this.prisma.task.update({ where: { id: taskId }, data: { status } }),
+      this.prisma.taskProgress.create({
+        data: {
+          taskId,
+          userId: actorId,
+          progressPercent: existing.progressPercent,
+          notes: `Status set to ${status} by supervisor`,
+          source: 'supervisor_override',
+        },
+      }),
+    ]);
+
+    if (existing.assigneeId && existing.assigneeId !== actorId) {
+      await this.notifications.create({
+        userId: existing.assigneeId,
+        type: 'task_assigned',
+        title: 'Task status updated',
+        body: `${existing.title}: ${existing.status} → ${status}`,
+        data: { taskId, status },
+      });
+    }
+
+    this.realtime.emitToProject(existing.projectId, 'task.progress', {
+      task: updated,
+    });
+    return updated;
   }
 
   async findByReference(

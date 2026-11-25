@@ -55,7 +55,11 @@ export function NotificationsScreen() {
         keyExtractor={(i) => i.id}
         renderItem={({ item }) => (
           <Pressable
-            onPress={() => api(`/notifications/${item.id}/read`, { method: 'PATCH' }).then(load)}
+            onPress={() =>
+              api(`/notifications/${item.id}/read`, { method: 'PATCH' })
+                .then(load)
+                .catch(() => undefined)
+            }
           >
             <Card>
               <Text style={{ color: c.ink, fontWeight: item.read ? '500' : '800' }}>

@@ -101,15 +101,21 @@ export function RootNavigator() {
               options={{ headerShown: false }}
             />
             <Stack.Screen name="TaskDetail" component={TaskDetailScreen} options={{ title: 'Task' }} />
-            <Stack.Screen name="Summary" component={SummaryScreen} options={{ title: 'Daily summary' }} />
-            <Stack.Screen name="AudioPoC" component={AudioPoCScreen} options={{ title: 'Audio PoC' }} />
             <Stack.Screen name="Blockers" component={BlockersScreen} options={{ title: 'Blockers' }} />
-            <Stack.Screen name="WorkerDetail" component={WorkerDetailScreen} options={{ title: 'Worker' }} />
             <Stack.Screen name="CreateIncident" component={CreateIncidentScreen} options={{ title: 'New incident' }} />
             <Stack.Screen name="CreateMaterial" component={CreateMaterialScreen} options={{ title: 'Material request' }} />
             <Stack.Screen name="CreateBlocker" component={CreateBlockerScreen} options={{ title: 'Report blocker' }} />
             <Stack.Screen name="Materials" component={MaterialsScreen} options={{ title: 'Materials' }} />
             <Stack.Screen name="Alerts" component={NotificationsScreen} options={{ title: 'Notifications' }} />
+            {user.role === 'SUPERVISOR' && (
+              <>
+                <Stack.Screen name="Summary" component={SummaryScreen} options={{ title: 'Daily summary' }} />
+                <Stack.Screen name="WorkerDetail" component={WorkerDetailScreen} options={{ title: 'Worker' }} />
+              </>
+            )}
+            {__DEV__ && (
+              <Stack.Screen name="AudioPoC" component={AudioPoCScreen} options={{ title: 'Audio PoC' }} />
+            )}
           </>
         )}
       </Stack.Navigator>
