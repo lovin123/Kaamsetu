@@ -4,7 +4,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { api } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
 import { Card, Loader, Screen, Subtitle, Title, useThemeColors } from '../components/ui';
-import { getSocket } from '../realtime/socket';
+import { getSocket, onSocketReady } from '../realtime/socket';
 
 export function SupervisorHomeScreen() {
   const { user } = useAuth();
@@ -18,6 +18,8 @@ export function SupervisorHomeScreen() {
     setLoading(true);
     try {
       setProjects(await api<any[]>('/projects'));
+    } catch {
+      // keep previous list
     } finally {
       setLoading(false);
     }
@@ -26,19 +28,26 @@ export function SupervisorHomeScreen() {
   useFocusEffect(
     useCallback(() => {
       load();
-      const s = getSocket();
-      setLiveHint(s?.connected ? 'Live updates on' : 'Live updates offline');
       const onProgress = () => load();
       const onConnect = () => setLiveHint('Live updates on');
       const onDisconnect = () => setLiveHint('Live updates offline');
-      s?.on('task.progress', onProgress);
-      s?.on('incident.created', onProgress);
-      s?.on('material.created', onProgress);
-      s?.on('blocker.created', onProgress);
-      s?.on('connect', onConnect);
-      s?.on('disconnect', onDisconnect);
+
+      const bind = (s: NonNullable<ReturnType<typeof getSocket>>) => {
+        setLiveHint(s.connected ? 'Live updates on' : 'Live updates offline');
+        s.on('task.progress', onProgress);
+        s.on('incident.created', onProgress);
+        s.on('material.created', onProgress);
+        s.on('blocker.created', onProgress);
+        s.on('connect', onConnect);
+        s.on('disconnect', onDisconnect);
+      };
+
+      const existing = getSocket();
+      if (existing) bind(existing);
+      const unsubReady = onSocketReady(bind);
+
       return () => {
-        // Re-fetch socket — connectRealtime may have replaced the instance
+        unsubReady();
         const current = getSocket();
         current?.off('task.progress', onProgress);
         current?.off('incident.created', onProgress);

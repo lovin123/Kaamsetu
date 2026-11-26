@@ -29,7 +29,8 @@ export class TasksController {
   @Get()
   list(
     @CurrentUser() user: AuthUser,
-    @Query('projectId') projectId?: string,
+    @Query('projectId', new ParseUUIDPipe({ optional: true }))
+    projectId?: string,
   ) {
     return this.tasks.list(user.id, user.role, projectId);
   }

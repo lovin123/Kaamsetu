@@ -12,14 +12,31 @@ export function TaskDetailScreen({ route }: any) {
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   useEffect(() => {
-    api(`/tasks/${taskId}`).then((t: any) => {
-      setTask(t);
-      setPercent(String(t.progressPercent ?? 0));
-    });
+    setLoadError(null);
+    api(`/tasks/${taskId}`)
+      .then((t: any) => {
+        setTask(t);
+        setPercent(String(t.progressPercent ?? 0));
+      })
+      .catch((err) => {
+        setLoadError((err as Error).message);
+        Alert.alert('Failed to load task', (err as Error).message);
+      });
   }, [taskId]);
 
-  if (!task) return <Loader />;
+  if (!task) {
+    return (
+      <Screen>
+        <Loader />
+        {loadError ? (
+          <Subtitle>{loadError}</Subtitle>
+        ) : null}
+      </Screen>
+    );
+  }
 
   const save = async () => {
     setBusy(true);

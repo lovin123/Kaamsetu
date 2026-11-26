@@ -7,21 +7,13 @@ import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { PrismaService } from '../prisma/prisma.service';
 import { Role } from '@prisma/client';
-
-function resolveCorsOrigin(corsOrigin: string | undefined): true | string[] {
-  if (!corsOrigin || corsOrigin.trim() === '*') return true;
-  return corsOrigin.split(',').map((o) => o.trim()).filter(Boolean);
-}
+import { isAdminRole } from '@kaamsetu/shared';
+import { PrismaService } from '../prisma/prisma.service';
 
 @WebSocketGateway({
-  cors: {
-    origin: resolveCorsOrigin(process.env.CORS_ORIGIN),
-    credentials: Boolean(
-      process.env.CORS_ORIGIN && process.env.CORS_ORIGIN.trim() !== '*',
-    ),
-  },
+  // Decorator runs before ConfigModule loads .env — tighten in handleConnection
+  cors: { origin: true, credentials: true },
   namespace: '/realtime',
 })
 export class RealtimeGateway implements OnGatewayConnection {
@@ -36,8 +28,23 @@ export class RealtimeGateway implements OnGatewayConnection {
     private readonly prisma: PrismaService,
   ) {}
 
+  private originAllowed(origin: string | undefined): boolean {
+    const allowed = this.config.get<string>('CORS_ORIGIN');
+    if (!allowed || allowed.trim() === '*') return true;
+    // Native clients often omit Origin
+    if (!origin) return true;
+    const list = allowed.split(',').map((o) => o.trim()).filter(Boolean);
+    return list.includes(origin);
+  }
+
   async handleConnection(client: Socket) {
     try {
+      const origin = client.handshake.headers.origin;
+      if (!this.originAllowed(typeof origin === 'string' ? origin : undefined)) {
+        client.disconnect();
+        return;
+      }
+
       const token =
         (client.handshake.auth?.token as string) ||
         (client.handshake.headers.authorization?.replace('Bearer ', '') ?? '');
@@ -52,25 +59,36 @@ export class RealtimeGateway implements OnGatewayConnection {
       }
       const payload = this.jwt.verify(token, { secret }) as {
         sub: string;
-        role?: Role;
+        typ?: string;
       };
-      client.data.userId = payload.sub;
-      client.data.role = payload.role;
-      client.join(`user:${payload.sub}`);
+      if (payload.typ === 'refresh') {
+        client.disconnect();
+        return;
+      }
+
+      // Always load role from DB (never trust JWT role claim after demotion)
+      const user = await this.prisma.user.findUnique({
+        where: { id: payload.sub },
+        select: { id: true, role: true },
+      });
+      if (!user) {
+        client.disconnect();
+        return;
+      }
+
+      client.data.userId = user.id;
+      client.data.role = user.role;
+      client.join(`user:${user.id}`);
 
       const projectId = client.handshake.query.projectId as string | undefined;
       if (projectId) {
-        const allowed = await this.canJoinProject(
-          payload.sub,
-          payload.role,
-          projectId,
-        );
+        const allowed = await this.canJoinProject(user.id, user.role, projectId);
         if (!allowed) {
           client.disconnect();
           return;
         }
         client.join(`project:${projectId}`);
-      } else if (payload.role === Role.SUPERVISOR) {
+      } else if (isAdminRole(user.role)) {
         const projects = await this.prisma.project.findMany({
           where: { active: true },
           select: { id: true },
@@ -78,12 +96,12 @@ export class RealtimeGateway implements OnGatewayConnection {
         for (const p of projects) client.join(`project:${p.id}`);
       } else {
         const memberships = await this.prisma.projectMember.findMany({
-          where: { userId: payload.sub, project: { active: true } },
+          where: { userId: user.id, project: { active: true } },
           select: { projectId: true },
         });
         for (const m of memberships) client.join(`project:${m.projectId}`);
       }
-      this.logger.debug(`WS connected user=${payload.sub}`);
+      this.logger.debug(`WS connected user=${user.id}`);
     } catch {
       client.disconnect();
     }
@@ -91,10 +109,10 @@ export class RealtimeGateway implements OnGatewayConnection {
 
   private async canJoinProject(
     userId: string,
-    role: Role | undefined,
+    role: Role,
     projectId: string,
   ) {
-    if (role === Role.SUPERVISOR) {
+    if (isAdminRole(role)) {
       const project = await this.prisma.project.findUnique({
         where: { id: projectId },
       });

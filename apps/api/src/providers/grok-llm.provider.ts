@@ -164,6 +164,10 @@ export class GrokLlmProvider implements LlmProvider {
       }
       lastBody = await res.text();
       last = new Response(lastBody, { status: res.status, statusText: res.statusText });
+      // Cached model went bad — clear so next request re-probes the chain
+      if (candidate === this.resolvedModel) {
+        this.resolvedModel = null;
+      }
       const modelMissing =
         res.status === 404 ||
         /model_not_found|model_decommissioned|does not exist|not have access|no longer supported|decommissioned/i.test(

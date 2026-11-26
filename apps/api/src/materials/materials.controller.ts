@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -32,7 +33,8 @@ export class MaterialsController {
   @Get()
   list(
     @CurrentUser() user: AuthUser,
-    @Query('projectId') projectId?: string,
+    @Query('projectId', new ParseUUIDPipe({ optional: true }))
+    projectId?: string,
   ) {
     return this.materials.list(user.id, user.role, projectId);
   }
@@ -48,7 +50,7 @@ export class MaterialsController {
   @Patch(':id/status')
   @Roles(Role.SUPERVISOR)
   updateStatus(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateMaterialStatusDto,
     @CurrentUser() user: AuthUser,
   ) {

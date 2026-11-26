@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -28,7 +29,8 @@ export class IncidentsController {
   @Get()
   list(
     @CurrentUser() user: AuthUser,
-    @Query('projectId') projectId?: string,
+    @Query('projectId', new ParseUUIDPipe({ optional: true }))
+    projectId?: string,
   ) {
     return this.incidents.list(user.id, user.role, projectId);
   }
@@ -41,7 +43,7 @@ export class IncidentsController {
   @Patch(':id/status')
   @Roles(Role.SUPERVISOR)
   updateStatus(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateIncidentStatusDto,
     @CurrentUser() user: AuthUser,
   ) {

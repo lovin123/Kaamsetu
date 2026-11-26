@@ -1,22 +1,57 @@
 import React, { useEffect, useState } from 'react';
-import { FlatList, Text } from 'react-native';
+import { Alert, FlatList, Text } from 'react-native';
 import { api } from '../api/client';
-import { Card, Loader, Screen, Subtitle, Title, useThemeColors } from '../components/ui';
+import {
+  Card,
+  Loader,
+  Screen,
+  Subtitle,
+  Title,
+  useThemeColors,
+} from '../components/ui';
 
 export function WorkerDetailScreen({ route }: any) {
   const { workerId } = route.params;
   const c = useThemeColors();
   const [worker, setWorker] = useState<any>(null);
   const [tasks, setTasks] = useState<any[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([api<any[]>('/users/workers'), api<any[]>('/tasks')]).then(([workers, all]) => {
-      setWorker(workers.find((w) => w.id === workerId) || null);
-      setTasks(all.filter((t) => t.assignee?.id === workerId || t.assigneeId === workerId));
-    });
+    setLoadError(null);
+    Promise.all([api<any[]>('/users/workers'), api<any[]>('/tasks')])
+      .then(([workers, all]) => {
+        const found = workers.find((w) => w.id === workerId) || null;
+        setWorker(found);
+        setTasks(
+          all.filter(
+            (t) => t.assignee?.id === workerId || t.assigneeId === workerId,
+          ),
+        );
+        if (!found) {
+          setLoadError('Worker not found on this team');
+        }
+      })
+      .catch((err) => {
+        setLoadError((err as Error).message);
+        Alert.alert('Failed to load worker', (err as Error).message);
+      });
   }, [workerId]);
 
-  if (!worker) return <Loader />;
+  if (!worker) {
+    return (
+      <Screen>
+        {loadError ? (
+          <>
+            <Title>Worker</Title>
+            <Subtitle>{loadError}</Subtitle>
+          </>
+        ) : (
+          <Loader />
+        )}
+      </Screen>
+    );
+  }
 
   return (
     <Screen>
@@ -36,7 +71,9 @@ export function WorkerDetailScreen({ route }: any) {
             </Text>
           </Card>
         )}
-        ListEmptyComponent={<Text style={{ color: c.muted }}>No assigned tasks.</Text>}
+        ListEmptyComponent={
+          <Text style={{ color: c.muted }}>No assigned tasks.</Text>
+        }
       />
     </Screen>
   );

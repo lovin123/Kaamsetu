@@ -1,10 +1,12 @@
 import {
   IsEnum,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
   IsUUID,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 import { TaskStatus } from '@prisma/client';
@@ -14,14 +16,17 @@ export class CreateTaskDto {
   projectId!: string;
 
   @IsString()
+  @MaxLength(200)
   title!: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(2000)
   description?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   location?: string;
 
   @IsOptional()
@@ -37,15 +42,17 @@ export class UpdateProgressDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(1000)
   notes?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(4000)
   transcript?: string;
 
   @IsOptional()
-  @IsString()
-  source?: string;
+  @IsIn(['manual', 'voice'])
+  source?: 'manual' | 'voice';
 }
 
 export class AssignTaskDto {

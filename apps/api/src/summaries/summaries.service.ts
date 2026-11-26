@@ -25,29 +25,29 @@ export class SummariesService {
     dateIso?: string,
   ) {
     if (!projectId) {
-      const project = await this.prisma.project.findFirst({
-        where: { active: true },
-        orderBy: { createdAt: 'asc' },
-      });
-      if (!project) throw new NotFoundException('No project');
-      projectId = project.id;
+      const projects = await this.projects.listForUser(actorId, actorRole);
+      if (!projects.length) throw new NotFoundException('No accessible project');
+      projectId = projects[0].id;
     }
 
-    await this.projects.assertAccess(projectId, actorId, actorRole);
+    await this.projects.assertStaffAccess(projectId, actorId, actorRole);
 
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
     });
     if (!project) throw new NotFoundException('Project not found');
 
-    const day = dateIso ? new Date(dateIso) : new Date();
-    if (Number.isNaN(day.getTime())) {
-      throw new BadRequestException('date must be a valid ISO 8601 date');
+    // Day window in Asia/Kolkata (app locale), independent of server TZ
+    const dateKey =
+      dateIso?.trim().slice(0, 10) ||
+      new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+      throw new BadRequestException('date must be YYYY-MM-DD');
     }
-    const start = new Date(day);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(day);
-    end.setHours(23, 59, 59, 999);
+    const [y, m, d] = dateKey.split('-').map(Number);
+    // IST = UTC+5:30
+    const start = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0) - 5.5 * 60 * 60 * 1000);
+    const end = new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999) - 5.5 * 60 * 60 * 1000);
 
     const [tasks, incidents, materials, blockers, progressUpdates] =
       await Promise.all([
@@ -111,7 +111,7 @@ export class SummariesService {
 
     const text = await this.llm.summarizeDay({
       projectName: project.name,
-      date: start.toISOString().slice(0, 10),
+      date: dateKey,
       tasks,
       incidents,
       materials,
@@ -122,7 +122,7 @@ export class SummariesService {
     return {
       projectId,
       projectName: project.name,
-      date: start.toISOString().slice(0, 10),
+      date: dateKey,
       text,
       stats: {
         tasks: tasks.length,

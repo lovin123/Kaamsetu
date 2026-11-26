@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { IncidentSeverity, Role } from '@prisma/client';
+import { isFieldWorker } from '@kaamsetu/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
@@ -63,12 +64,34 @@ export class IncidentsService {
     private readonly projects: ProjectsService,
   ) {}
 
-  list(userId: string, role: Role, projectId?: string) {
+  async list(userId: string, role: Role, projectId?: string) {
+    if (isFieldWorker(role)) {
+      if (projectId) {
+        await this.projects.assertAccess(projectId, userId, role);
+      }
+      return this.prisma.incident.findMany({
+        where: {
+          reporterId: userId,
+          ...(projectId ? { projectId } : {}),
+        },
+        include: {
+          reporter: { select: { id: true, name: true } },
+          project: { select: { id: true, name: true } },
+          task: { select: { id: true, title: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+    if (projectId) {
+      await this.projects.assertAccess(projectId, userId, role);
+    }
+    const scope = await this.projects.accessibleProjectIds(userId, role);
     return this.prisma.incident.findMany({
-      where: {
-        ...(projectId ? { projectId } : {}),
-        ...(role === Role.WORKER ? { reporterId: userId } : {}),
-      },
+      where: projectId
+        ? { projectId }
+        : scope === 'ALL'
+          ? {}
+          : { projectId: { in: scope } },
       include: {
         reporter: { select: { id: true, name: true } },
         project: { select: { id: true, name: true } },
@@ -101,13 +124,11 @@ export class IncidentsService {
       },
     });
 
-    const supervisors = await this.prisma.projectMember.findMany({
-      where: { projectId: dto.projectId, role: Role.SUPERVISOR },
-    });
+    const staffIds = await this.projects.listStaffMemberIds(dto.projectId);
     await Promise.all(
-      supervisors.map((s) =>
+      staffIds.map((staffId) =>
         this.notifications.create({
-          userId: s.userId,
+          userId: staffId,
           type: 'incident',
           title: `Incident: ${incident.title}`,
           body: incident.description,
@@ -127,7 +148,7 @@ export class IncidentsService {
   ) {
     const existing = await this.prisma.incident.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Incident not found');
-    await this.projects.assertAccess(existing.projectId, userId, role);
+    await this.projects.assertStaffAccess(existing.projectId, userId, role);
     return this.prisma.incident.update({ where: { id }, data: { status } });
   }
 }

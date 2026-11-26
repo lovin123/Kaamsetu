@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -22,7 +23,8 @@ export class BlockersController {
   @Get()
   list(
     @CurrentUser() user: AuthUser,
-    @Query('projectId') projectId?: string,
+    @Query('projectId', new ParseUUIDPipe({ optional: true }))
+    projectId?: string,
   ) {
     return this.blockers.list(user.id, user.role, projectId);
   }
@@ -34,7 +36,10 @@ export class BlockersController {
 
   @Patch(':id/resolve')
   @Roles(Role.SUPERVISOR)
-  resolve(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+  resolve(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.blockers.resolve(id, user.id, user.role);
   }
 }

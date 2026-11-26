@@ -1,17 +1,20 @@
 import React, { useState } from 'react';
 import { Alert, Text, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { api } from '../api/client';
+import { isFieldWorker } from '@kaamsetu/shared';
+import { ApiError, api } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
 import { registerPushToken } from '../notifications/push';
 import { Field, PrimaryButton, Screen, Subtitle, Title, useThemeColors } from '../components/ui';
 
 export function ProfileScreen() {
-  const { user, logout, persistUser } = useAuth();
+  const { user, logout, persistUser, refreshRealtime } = useAuth();
   const nav = useNavigation<any>();
   const c = useThemeColors();
   const [language, setLanguage] = useState(user?.preferredLanguage || 'hi-IN');
+  const [projectCode, setProjectCode] = useState('');
   const [busy, setBusy] = useState(false);
+  const worker = user ? isFieldWorker(user.role) : false;
 
   const save = async () => {
     setBusy(true);
@@ -30,6 +33,31 @@ export function ProfileScreen() {
       Alert.alert('Saved', 'Language preference updated');
     } catch (err) {
       Alert.alert('Error', (err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const joinProject = async () => {
+    if (!projectCode.trim()) {
+      Alert.alert('Enter a project code');
+      return;
+    }
+    setBusy(true);
+    try {
+      await api('/projects/join', {
+        method: 'POST',
+        body: JSON.stringify({ code: projectCode.trim() }),
+      });
+      await refreshRealtime();
+      Alert.alert('Joined', `You joined project ${projectCode.trim().toUpperCase()}`);
+      setProjectCode('');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        Alert.alert('Already a member');
+      } else {
+        Alert.alert('Join failed', (err as Error).message);
+      }
     } finally {
       setBusy(false);
     }
@@ -57,6 +85,18 @@ export function ProfileScreen() {
         onChangeText={setLanguage}
       />
       <PrimaryButton label={busy ? 'Saving…' : 'Save preferences'} onPress={save} disabled={busy} />
+      {worker && (
+        <>
+          <View style={{ height: 16 }} />
+          <Field
+            label="Join site (project code)"
+            value={projectCode}
+            onChangeText={setProjectCode}
+            placeholder="PTP-B"
+          />
+          <PrimaryButton label="Join project" onPress={joinProject} disabled={busy} />
+        </>
+      )}
       <View style={{ height: 12 }} />
       <PrimaryButton label="Enable push notifications" onPress={registerPush} />
       <View style={{ height: 12 }} />
@@ -69,9 +109,6 @@ export function ProfileScreen() {
       )}
       <View style={{ height: 12 }} />
       <PrimaryButton label="Sign out" onPress={() => logout()} />
-      <Text style={{ color: c.muted, marginTop: 16, fontSize: 12 }}>
-        Push uses Expo Push Token (works without Firebase). Firebase FCM Admin is used when a native FCM token is stored.
-      </Text>
     </Screen>
   );
 }

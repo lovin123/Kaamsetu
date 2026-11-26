@@ -69,12 +69,18 @@ export function Field({
   onChangeText,
   secureTextEntry,
   placeholder,
+  keyboardType,
+  autoComplete,
+  maxLength,
 }: {
   label: string;
   value: string;
   onChangeText: (t: string) => void;
   secureTextEntry?: boolean;
   placeholder?: string;
+  keyboardType?: 'default' | 'phone-pad' | 'number-pad' | 'email-address';
+  autoComplete?: 'tel' | 'off' | 'name' | 'password' | 'sms-otp';
+  maxLength?: number;
 }) {
   const c = useThemeColors();
   return (
@@ -86,6 +92,9 @@ export function Field({
         secureTextEntry={secureTextEntry}
         placeholder={placeholder}
         placeholderTextColor={c.muted}
+        keyboardType={keyboardType}
+        autoComplete={autoComplete}
+        maxLength={maxLength}
         style={[
           styles.input,
           { color: c.ink, borderColor: c.border, backgroundColor: c.surface },

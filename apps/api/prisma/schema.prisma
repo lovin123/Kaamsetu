@@ -10,6 +10,7 @@ datasource db {
 enum Role {
   WORKER
   SUPERVISOR
+  ADMIN
 }
 
 enum TaskStatus {
@@ -47,6 +48,7 @@ enum BlockerStatus {
 
 enum NotificationType {
   task_assigned
+  task_status_changed
   progress_update
   incident
   material_request
@@ -58,7 +60,6 @@ enum NotificationType {
 model User {
   id                 String   @id @default(uuid())
   phone              String   @unique
-  passwordHash       String
   name               String
   role               Role
   preferredLanguage  String   @default("hi-IN")
@@ -78,6 +79,25 @@ model User {
   conversations      Conversation[]
   actionLogs         ActionLog[]
   notifications      Notification[]
+}
+
+/** One-time mobile OTP for passwordless login / register */
+model OtpChallenge {
+  id                String    @id @default(uuid())
+  phone             String
+  purpose           String
+  codeHash          String
+  /** Bound at request time — register verify must use this role */
+  intendedRole      String?
+  /** True when ADMIN_BOOTSTRAP_SECRET was validated at request */
+  bootstrapGranted  Boolean   @default(false)
+  attempts          Int       @default(0)
+  expiresAt         DateTime
+  consumedAt        DateTime?
+  createdAt         DateTime  @default(now())
+
+  @@index([phone, purpose])
+  @@index([expiresAt])
 }
 
 model Project {

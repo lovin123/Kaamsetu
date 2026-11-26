@@ -12,6 +12,7 @@ import {
   Title,
   useThemeColors,
 } from '../components/ui';
+import { ProjectPicker } from '../components/ProjectPicker';
 
 export function TasksManageScreen() {
   const c = useThemeColors();
@@ -19,6 +20,7 @@ export function TasksManageScreen() {
   const [tasks, setTasks] = useState<any[]>([]);
   const [workers, setWorkers] = useState<any[]>([]);
   const [projects, setProjects] = useState<any[]>([]);
+  const [projectId, setProjectId] = useState('');
   const [loading, setLoading] = useState(true);
   const [title, setTitle] = useState('');
   const [location, setLocation] = useState('');
@@ -36,7 +38,10 @@ export function TasksManageScreen() {
       setTasks(t);
       setWorkers(w);
       setProjects(p);
+      setProjectId((prev) => prev || p[0]?.id || '');
       setAssigneeId((prev) => prev || w[0]?.id || '');
+    } catch (err) {
+      Alert.alert('Failed to load', (err as Error).message);
     } finally {
       setLoading(false);
     }
@@ -49,7 +54,7 @@ export function TasksManageScreen() {
   );
 
   const create = async () => {
-    if (!title.trim() || !projects[0]?.id) {
+    if (!title.trim() || !projectId) {
       Alert.alert('Missing fields', 'Title and project required');
       return;
     }
@@ -58,7 +63,7 @@ export function TasksManageScreen() {
       await api('/tasks', {
         method: 'POST',
         body: JSON.stringify({
-          projectId: projects[0].id,
+          projectId,
           title: title.trim(),
           location: location.trim() || undefined,
           assigneeId: assigneeId || undefined,
@@ -82,6 +87,13 @@ export function TasksManageScreen() {
       <Title>Task management</Title>
       <Subtitle>Assign and track site work</Subtitle>
       <Card>
+        {projects.length > 0 && projectId ? (
+          <ProjectPicker
+            projects={projects}
+            value={projectId}
+            onChange={setProjectId}
+          />
+        ) : null}
         <Field label="Title" value={title} onChangeText={setTitle} placeholder="Second floor wiring" />
         <Field label="Location" value={location} onChangeText={setLocation} placeholder="Second floor" />
         <Text style={{ color: c.muted, marginBottom: 8 }}>Assignee</Text>

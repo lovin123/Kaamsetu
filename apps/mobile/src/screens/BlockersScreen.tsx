@@ -1,6 +1,7 @@
 import React, { useCallback, useState } from 'react';
 import { Alert, FlatList, RefreshControl, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { isStaffRole } from '@kaamsetu/shared';
 import { api } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
 import { Card, Loader, PrimaryButton, Screen, Subtitle, Title, useThemeColors } from '../components/ui';
@@ -16,6 +17,7 @@ export function BlockersScreen() {
     setLoading(true);
     api<any[]>('/blockers')
       .then(setItems)
+      .catch((err) => Alert.alert('Failed to load', (err as Error).message))
       .finally(() => setLoading(false));
   }, []);
 
@@ -54,7 +56,7 @@ export function BlockersScreen() {
               {item.category} · {item.status}
             </Text>
             <Text style={{ color: c.ink, marginTop: 8 }}>{item.reason}</Text>
-            {user?.role === 'SUPERVISOR' && item.status === 'open' && (
+            {user && isStaffRole(user.role) && item.status === 'open' && (
               <View style={{ marginTop: 10 }}>
                 <PrimaryButton label="Resolve blocker" onPress={() => resolve(item.id)} />
               </View>

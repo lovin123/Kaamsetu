@@ -13,6 +13,7 @@ import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system';
 import type { DenoiseMode } from '@kaamsetu/shared';
 import { ApiError, api, isNetworkError } from '../api/client';
+import { useAuth } from '../auth/AuthContext';
 import { KaamSetuAudio } from '../native/KaamSetuAudio';
 import {
   Card,
@@ -22,12 +23,18 @@ import {
   Title,
   useThemeColors,
 } from '../components/ui';
+import { ProjectPicker } from '../components/ProjectPicker';
 import { enqueueVoiceAudio } from '../offline/queue';
 
 type VoiceState = 'idle' | 'recording' | 'processing' | 'confirm';
-const CONV_KEY = 'kaamsetu_conversation_id';
+type ProjectRow = { id: string; name?: string; code?: string };
+
+function convKey(userId: string) {
+  return `kaamsetu_conversation_id:${userId}`;
+}
 
 export function VoiceScreen() {
+  const { user } = useAuth();
   const c = useThemeColors();
   const [state, setState] = useState<VoiceState>('idle');
   const [mode, setMode] = useState<DenoiseMode>('deepfilternet');
@@ -36,6 +43,7 @@ export function VoiceScreen() {
   const [transcript, setTranscript] = useState('');
   const [reply, setReply] = useState('');
   const [actionId, setActionId] = useState<string | null>(null);
+  const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [projectId, setProjectId] = useState<string | undefined>();
   const [conversationId, setConversationId] = useState<string | undefined>();
   const recordingRef = useRef<Audio.Recording | null>(null);
@@ -45,11 +53,14 @@ export function VoiceScreen() {
 
   useEffect(() => {
     (async () => {
-      const saved = await AsyncStorage.getItem(CONV_KEY);
-      if (saved) setConversationId(saved);
+      if (user?.id) {
+        const saved = await AsyncStorage.getItem(convKey(user.id));
+        if (saved) setConversationId(saved);
+      }
       try {
-        const projects = await api<any[]>('/projects');
-        setProjectId(projects[0]?.id);
+        const list = await api<ProjectRow[]>('/projects');
+        setProjects(list);
+        setProjectId((prev) => prev ?? list[0]?.id);
       } catch {
         // ignore
       }
@@ -65,17 +76,17 @@ export function VoiceScreen() {
         recordingRef.current = null;
       }
     };
-  }, [native]);
+  }, [native, user?.id]);
 
   const rememberConversation = async (id?: string) => {
-    if (!id) return;
+    if (!id || !user?.id) return;
     setConversationId(id);
-    await AsyncStorage.setItem(CONV_KEY, id);
+    await AsyncStorage.setItem(convKey(user.id), id);
   };
 
   const clearConversation = async () => {
     setConversationId(undefined);
-    await AsyncStorage.removeItem(CONV_KEY);
+    if (user?.id) await AsyncStorage.removeItem(convKey(user.id));
   };
 
   const cycleMode = () => {
@@ -270,6 +281,7 @@ export function VoiceScreen() {
           audioType: uploadType,
           projectId,
           conversationId,
+          idempotencyKey: idempotencyRef.current,
         }).catch(() => undefined);
         Alert.alert(
           'Queued for sync',
@@ -310,6 +322,16 @@ export function VoiceScreen() {
         <Subtitle>
           Tap the mic and speak naturally. Denoise: DeepFilterNet → Android NS → raw.
         </Subtitle>
+
+        {projects.length > 0 && projectId ? (
+          <View style={{ marginTop: 16 }}>
+            <ProjectPicker
+              projects={projects}
+              value={projectId}
+              onChange={setProjectId}
+            />
+          </View>
+        ) : null}
 
         <Pressable onPress={cycleMode} style={{ marginTop: 12 }}>
           <Text style={{ color: c.accent, fontWeight: '700' }}>

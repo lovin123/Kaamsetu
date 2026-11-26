@@ -36,6 +36,21 @@ class TranscriptDto {
   idempotencyKey?: string;
 }
 
+class AudioBodyDto {
+  @IsOptional()
+  @IsUUID()
+  projectId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  conversationId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  idempotencyKey?: string;
+}
+
 class ConfirmDto {
   @IsUUID()
   actionId!: string;
@@ -68,12 +83,7 @@ export class VoiceController {
   async audio(
     @CurrentUser() user: AuthUser,
     @UploadedFile() file: Express.Multer.File,
-    @Body()
-    body: {
-      projectId?: string;
-      conversationId?: string;
-      idempotencyKey?: string;
-    },
+    @Body() body: AudioBodyDto,
   ) {
     if (!file?.buffer?.length) {
       throw new BadRequestException('audio file is required');

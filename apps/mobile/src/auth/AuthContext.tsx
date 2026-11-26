@@ -8,14 +8,17 @@ import React, {
 import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
+  AuthRole,
+  OtpPurpose,
   User,
   api,
   clearSession,
+  getRefreshToken,
   getStoredUser,
-  login as apiLogin,
   onSessionExpired,
-  register as apiRegister,
+  requestOtp as apiRequestOtp,
   updateStoredUser,
+  verifyOtp as apiVerifyOtp,
 } from '../api/client';
 import { clearQueue, flushQueue, pendingCount } from '../offline/queue';
 import { connectRealtime, disconnectRealtime } from '../realtime/socket';
@@ -25,11 +28,21 @@ type AuthContextValue = {
   user: User | null;
   loading: boolean;
   onboarded: boolean;
-  login: (phone: string, password: string) => Promise<void>;
-  register: (input: {
+  requestOtp: (input: {
     phone: string;
-    password: string;
-    name: string;
+    purpose: OtpPurpose;
+    bootstrapSecret?: string;
+  }) => Promise<{
+    expiresInSeconds: number;
+    assignedRole?: AuthRole;
+    devCode?: string;
+  }>;
+  verifyOtp: (input: {
+    phone: string;
+    code: string;
+    purpose: OtpPurpose;
+    name?: string;
+    bootstrapSecret?: string;
   }) => Promise<void>;
   logout: () => Promise<void>;
   setUser: (u: User | null) => void;
@@ -45,13 +58,8 @@ function onboardKey(userId: string) {
 }
 
 async function joinRealtime() {
-  try {
-    const projects = await api<{ id: string }[]>('/projects');
-    await connectRealtime(projects[0]?.id);
-  } catch {
-    // Gateway joins all memberships when projectId omitted
-    await connectRealtime();
-  }
+  // No projectId → server joins all authorized project rooms for this user
+  await connectRealtime();
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -64,6 +72,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const stored = await getStoredUser();
       setUser(stored);
       if (stored) {
+        // Refresh role/profile from server (handles demotion while offline)
+        try {
+          const me = await api<{
+            id: string;
+            phone: string;
+            name: string;
+            role: User['role'];
+            preferredLanguage: string;
+          }>('/users/me');
+          const fresh = {
+            id: me.id,
+            phone: me.phone,
+            name: me.name,
+            role: me.role,
+            preferredLanguage: me.preferredLanguage,
+          };
+          setUser(fresh);
+          await updateStoredUser(fresh);
+        } catch {
+          // Keep cached user if offline
+        }
         const flag = await AsyncStorage.getItem(onboardKey(stored.id));
         setOnboarded(flag === '1');
         flushQueue().catch(() => undefined);
@@ -76,9 +105,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
-  // When refresh fails / tokens cleared, force login UI
   useEffect(() => {
     return onSessionExpired(() => {
+      clearQueue().catch(() => undefined);
       setUser(null);
       setOnboarded(false);
       disconnectRealtime();
@@ -103,19 +132,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       refreshRealtime: async () => {
         await joinRealtime();
       },
-      login: async (phone, password) => {
-        const data = await apiLogin(phone, password);
-        setUser(data.user);
-        const flag = await AsyncStorage.getItem(onboardKey(data.user.id));
-        setOnboarded(flag === '1');
-        await flushQueue();
-        joinRealtime().catch(() => undefined);
-        registerPushToken().catch(() => undefined);
+      requestOtp: async (input) => {
+        const data = await apiRequestOtp(input);
+        return {
+          expiresInSeconds: data.expiresInSeconds,
+          assignedRole: data.assignedRole,
+          devCode: data.devCode,
+        };
       },
-      register: async (input) => {
-        const data = await apiRegister(input);
+      verifyOtp: async (input) => {
+        const data = await apiVerifyOtp(input);
         setUser(data.user);
-        setOnboarded(false);
+        if (input.purpose === 'register') {
+          setOnboarded(false);
+        } else {
+          const flag = await AsyncStorage.getItem(onboardKey(data.user.id));
+          setOnboarded(flag === '1');
+          await flushQueue();
+        }
         joinRealtime().catch(() => undefined);
         registerPushToken().catch(() => undefined);
       },
@@ -138,10 +172,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           });
           if (!discard) return;
         }
-        // Revoke server refresh token (best-effort)
-        await api('/auth/logout', { method: 'POST', body: '{}' }).catch(
-          () => undefined,
-        );
+        const refreshToken = await getRefreshToken();
+        if (refreshToken) {
+          await api('/auth/logout', {
+            method: 'POST',
+            auth: false,
+            body: JSON.stringify({ refreshToken }),
+          }).catch(() => undefined);
+        }
         disconnectRealtime();
         await clearQueue();
         await clearSession();

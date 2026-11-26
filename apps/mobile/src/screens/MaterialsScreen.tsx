@@ -1,6 +1,7 @@
 import React, { useCallback, useState } from 'react';
 import { Alert, FlatList, RefreshControl, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { isStaffRole } from '@kaamsetu/shared';
 import { api } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
 import { Card, Loader, PrimaryButton, Screen, Subtitle, Title, useThemeColors } from '../components/ui';
@@ -16,6 +17,7 @@ export function MaterialsScreen() {
     setLoading(true);
     api<any[]>('/materials')
       .then(setItems)
+      .catch((err) => Alert.alert('Failed to load', (err as Error).message))
       .finally(() => setLoading(false));
   }, []);
 
@@ -58,7 +60,7 @@ export function MaterialsScreen() {
             <Text style={{ color: c.muted, marginTop: 4 }}>
               {item.urgency} · {item.status} · {item.requester?.name}
             </Text>
-            {user?.role === 'SUPERVISOR' && item.status === 'pending' && (
+            {user && isStaffRole(user.role) && item.status === 'pending' && (
               <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
                 <PrimaryButton label="Approve" onPress={() => setStatus(item.id, 'approved')} />
                 <PrimaryButton label="Reject" onPress={() => setStatus(item.id, 'rejected')} />

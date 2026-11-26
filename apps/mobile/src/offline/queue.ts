@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { api, getStoredUser } from '../api/client';
+import { ApiError, api, getStoredUser } from '../api/client';
 
 const QUEUE_KEY = 'kaamsetu_offline_queue';
 
@@ -54,6 +54,7 @@ export async function enqueueVoiceAudio(params: {
   audioType?: string;
   projectId?: string;
   conversationId?: string;
+  idempotencyKey?: string;
 }) {
   const items = await readQueue();
   const item: QueuedMutation = {
@@ -69,7 +70,9 @@ export async function enqueueVoiceAudio(params: {
         ? { conversationId: params.conversationId }
         : {}),
     },
-    idempotencyKey: `voice-offline-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    idempotencyKey:
+      params.idempotencyKey ??
+      `voice-offline-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     createdAt: new Date().toISOString(),
     status: 'pending',
   };
@@ -83,7 +86,7 @@ export async function listQueue() {
 }
 
 export async function pendingCount() {
-  return (await readQueue()).length;
+  return (await readQueue()).filter((i) => i.status !== 'failed').length;
 }
 
 export async function clearQueue() {
@@ -127,11 +130,16 @@ export async function flushQueue() {
           });
         }
       } catch (err) {
-        remaining.push({
-          ...item,
-          status: 'failed',
-          lastError: (err as Error).message,
-        });
+        const status = err instanceof ApiError ? err.status : 0;
+        const permanent = status >= 400 && status < 500 && status !== 429;
+        if (!permanent) {
+          remaining.push({
+            ...item,
+            status: 'failed',
+            lastError: (err as Error).message,
+          });
+        }
+        // Drop permanent 4xx (except rate-limit) so they are not retried forever
       }
     }
     await writeQueue(remaining);

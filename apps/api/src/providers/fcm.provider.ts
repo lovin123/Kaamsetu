@@ -52,29 +52,23 @@ export class FcmProvider implements OnModuleInit {
 
   private loadFromFile(): admin.ServiceAccount | null {
     const configured = this.config.get<string>('FIREBASE_SERVICE_ACCOUNT_PATH');
-    const candidates = [
-      configured,
-      path.join(process.cwd(), 'secrets', 'firebase-adminsdk.json'),
-    ].filter(Boolean) as string[];
+    if (!configured?.trim()) return null;
 
-    for (const candidate of candidates) {
-      const resolved = path.isAbsolute(candidate)
-        ? candidate
-        : path.resolve(process.cwd(), candidate);
-      if (!fs.existsSync(resolved)) continue;
-      const raw = JSON.parse(fs.readFileSync(resolved, 'utf8')) as {
-        project_id?: string;
-        client_email?: string;
-        private_key?: string;
-      };
-      if (!raw.project_id || !raw.client_email || !raw.private_key) continue;
-      return {
-        projectId: raw.project_id,
-        clientEmail: raw.client_email,
-        privateKey: raw.private_key,
-      };
-    }
-    return null;
+    const resolved = path.isAbsolute(configured)
+      ? configured
+      : path.resolve(process.cwd(), configured);
+    if (!fs.existsSync(resolved)) return null;
+    const raw = JSON.parse(fs.readFileSync(resolved, 'utf8')) as {
+      project_id?: string;
+      client_email?: string;
+      private_key?: string;
+    };
+    if (!raw.project_id || !raw.client_email || !raw.private_key) return null;
+    return {
+      projectId: raw.project_id,
+      clientEmail: raw.client_email,
+      privateKey: raw.private_key,
+    };
   }
 
   isReady() {

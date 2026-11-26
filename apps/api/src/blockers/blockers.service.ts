@@ -1,5 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { BlockerStatus, Role, TaskStatus } from '@prisma/client';
+import { isFieldWorker } from '@kaamsetu/shared';
 import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -37,12 +43,34 @@ export class BlockersService {
     private readonly projects: ProjectsService,
   ) {}
 
-  list(userId: string, role: Role, projectId?: string) {
+  async list(userId: string, role: Role, projectId?: string) {
+    if (isFieldWorker(role)) {
+      if (projectId) {
+        await this.projects.assertAccess(projectId, userId, role);
+      }
+      return this.prisma.blocker.findMany({
+        where: {
+          reporterId: userId,
+          ...(projectId ? { projectId } : {}),
+        },
+        include: {
+          task: { select: { id: true, title: true } },
+          reporter: { select: { id: true, name: true } },
+          project: { select: { id: true, name: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+    if (projectId) {
+      await this.projects.assertAccess(projectId, userId, role);
+    }
+    const scope = await this.projects.accessibleProjectIds(userId, role);
     return this.prisma.blocker.findMany({
-      where: {
-        ...(projectId ? { projectId } : {}),
-        ...(role === Role.WORKER ? { reporterId: userId } : {}),
-      },
+      where: projectId
+        ? { projectId }
+        : scope === 'ALL'
+          ? {}
+          : { projectId: { in: scope } },
       include: {
         task: { select: { id: true, title: true } },
         reporter: { select: { id: true, name: true } },
@@ -54,7 +82,20 @@ export class BlockersService {
 
   async create(dto: CreateBlockerDto, reporterId: string, role: Role) {
     await this.projects.assertAccess(dto.projectId, reporterId, role);
-    await this.projects.assertTaskInProject(dto.taskId, dto.projectId);
+    const task = await this.projects.assertTaskInProject(
+      dto.taskId,
+      dto.projectId,
+    );
+    if (isFieldWorker(role) && task.assigneeId !== reporterId) {
+      throw new ForbiddenException(
+        'Workers can only block tasks assigned to them',
+      );
+    }
+    if (task.status === TaskStatus.completed) {
+      throw new BadRequestException(
+        'Cannot block a completed task — reopen it first',
+      );
+    }
 
     const [blocker] = await this.prisma.$transaction([
       this.prisma.blocker.create({
@@ -77,13 +118,11 @@ export class BlockersService {
       }),
     ]);
 
-    const supervisors = await this.prisma.projectMember.findMany({
-      where: { projectId: dto.projectId, role: Role.SUPERVISOR },
-    });
+    const staffIds = await this.projects.listStaffMemberIds(dto.projectId);
     await Promise.all(
-      supervisors.map((s) =>
+      staffIds.map((staffId) =>
         this.notifications.create({
-          userId: s.userId,
+          userId: staffId,
           type: 'blocker',
           title: 'Task blocked',
           body: `${blocker.task.title}: ${dto.reason}`,
@@ -98,7 +137,7 @@ export class BlockersService {
   async resolve(id: string, userId: string, role: Role) {
     const existing = await this.prisma.blocker.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Blocker not found');
-    await this.projects.assertAccess(existing.projectId, userId, role);
+    await this.projects.assertStaffAccess(existing.projectId, userId, role);
     const blocker = await this.prisma.blocker.update({
       where: { id },
       data: { status: BlockerStatus.resolved },
@@ -108,8 +147,12 @@ export class BlockersService {
       where: { taskId: blocker.taskId, status: BlockerStatus.open },
     });
     if (open === 0) {
-      await this.prisma.task.update({
-        where: { id: blocker.taskId },
+      // Never reopen a completed task when clearing blockers
+      await this.prisma.task.updateMany({
+        where: {
+          id: blocker.taskId,
+          status: { not: TaskStatus.completed },
+        },
         data: { status: TaskStatus.in_progress },
       });
     }

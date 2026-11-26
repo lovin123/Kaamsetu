@@ -25,6 +25,10 @@ import { WorkerDetailScreen } from '../screens/WorkerDetailScreen';
 import { CreateIncidentScreen } from '../screens/CreateIncidentScreen';
 import { CreateMaterialScreen } from '../screens/CreateMaterialScreen';
 import { CreateBlockerScreen } from '../screens/CreateBlockerScreen';
+import { AdminUsersScreen } from '../screens/AdminUsersScreen';
+import { AdminTeamsScreen } from '../screens/AdminTeamsScreen';
+import { TeamDetailScreen } from '../screens/TeamDetailScreen';
+import { isAdminRole, isStaffRole, type Role } from '@kaamsetu/shared';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -59,7 +63,7 @@ function WorkerTabs() {
   );
 }
 
-function SupervisorTabs() {
+function StaffTabs({ isAdmin = false }: { isAdmin?: boolean }) {
   const c = useColorScheme() === 'dark' ? colors.dark : colors.light;
   return (
     <Tab.Navigator
@@ -71,13 +75,30 @@ function SupervisorTabs() {
       }}
     >
       <Tab.Screen name="Home" component={SupervisorHomeScreen} options={{ tabBarIcon: ({ focused, color }) => <TabIcon label="Site" focused={focused} color={color} /> }} />
+      <Tab.Screen name="Teams" component={AdminTeamsScreen} options={{ tabBarIcon: ({ focused, color }) => <TabIcon label="Teams" focused={focused} color={color} /> }} />
       <Tab.Screen name="Tasks" component={TasksManageScreen} options={{ tabBarIcon: ({ focused, color }) => <TabIcon label="Tasks" focused={focused} color={color} /> }} />
-      <Tab.Screen name="Workforce" component={WorkforceScreen} options={{ tabBarIcon: ({ focused, color }) => <TabIcon label="Team" focused={focused} color={color} /> }} />
+      <Tab.Screen name="Workforce" component={WorkforceScreen} options={{ tabBarIcon: ({ focused, color }) => <TabIcon label="Crew" focused={focused} color={color} /> }} />
+      {isAdmin && (
+        <Tab.Screen name="Users" component={AdminUsersScreen} options={{ tabBarIcon: ({ focused, color }) => <TabIcon label="Users" focused={focused} color={color} /> }} />
+      )}
       <Tab.Screen name="Voice" component={VoiceScreen} options={{ tabBarIcon: ({ focused, color }) => <TabIcon label="Mic" focused={focused} color={color} /> }} />
-      <Tab.Screen name="Incidents" component={IncidentsScreen} options={{ tabBarIcon: ({ focused, color }) => <TabIcon label="Alert" focused={focused} color={color} /> }} />
       <Tab.Screen name="Profile" component={ProfileScreen} options={{ tabBarIcon: ({ focused, color }) => <TabIcon label="Me" focused={focused} color={color} /> }} />
     </Tab.Navigator>
   );
+}
+
+function AdminTabs() {
+  return <StaffTabs isAdmin />;
+}
+
+function SupervisorTabs() {
+  return <StaffTabs />;
+}
+
+function tabsForRole(role: Role) {
+  if (isAdminRole(role)) return AdminTabs;
+  if (isStaffRole(role)) return SupervisorTabs;
+  return WorkerTabs;
 }
 
 export function RootNavigator() {
@@ -97,17 +118,19 @@ export function RootNavigator() {
           <>
             <Stack.Screen
               name="Main"
-              component={user.role === 'SUPERVISOR' ? SupervisorTabs : WorkerTabs}
+              component={tabsForRole(user.role)}
               options={{ headerShown: false }}
             />
             <Stack.Screen name="TaskDetail" component={TaskDetailScreen} options={{ title: 'Task' }} />
+            <Stack.Screen name="TeamDetail" component={TeamDetailScreen} options={{ title: 'Team roster' }} />
             <Stack.Screen name="Blockers" component={BlockersScreen} options={{ title: 'Blockers' }} />
             <Stack.Screen name="CreateIncident" component={CreateIncidentScreen} options={{ title: 'New incident' }} />
             <Stack.Screen name="CreateMaterial" component={CreateMaterialScreen} options={{ title: 'Material request' }} />
             <Stack.Screen name="CreateBlocker" component={CreateBlockerScreen} options={{ title: 'Report blocker' }} />
             <Stack.Screen name="Materials" component={MaterialsScreen} options={{ title: 'Materials' }} />
+            <Stack.Screen name="Incidents" component={IncidentsScreen} options={{ title: 'Incidents' }} />
             <Stack.Screen name="Alerts" component={NotificationsScreen} options={{ title: 'Notifications' }} />
-            {user.role === 'SUPERVISOR' && (
+            {isStaffRole(user.role) && (
               <>
                 <Stack.Screen name="Summary" component={SummaryScreen} options={{ title: 'Daily summary' }} />
                 <Stack.Screen name="WorkerDetail" component={WorkerDetailScreen} options={{ title: 'Worker' }} />

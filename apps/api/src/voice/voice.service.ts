@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Role } from '@prisma/client';
-import { VoiceIntent } from '@kaamsetu/shared';
+import { isFieldWorker, isStaffRole, VoiceIntent } from '@kaamsetu/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   LLM_PROVIDER,
@@ -118,39 +118,39 @@ export class VoiceService {
     // Confirmation only via /voice/confirm — never from client body.
     const confirmed = false;
 
+    const role = params.user.role as Role;
     let projectId = params.projectId;
     if (!projectId) {
-      const memberships = await this.prisma.projectMember.findMany({
-        where: { userId: params.user.id },
-        take: 2,
-      });
-      if (memberships.length > 1) {
+      const scope = await this.projects.accessibleProjectIds(
+        params.user.id,
+        role,
+      );
+      if (scope === 'ALL') {
+        throw new BadRequestException(
+          'projectId is required for admin voice actions',
+        );
+      }
+      if (scope.length === 0) {
+        throw new BadRequestException('Join a project before using voice');
+      }
+      if (scope.length > 1) {
         throw new BadRequestException(
           'projectId is required when you belong to multiple projects',
         );
       }
-      projectId = memberships[0]?.projectId;
+      projectId = scope[0];
     }
 
-    if (projectId) {
-      await this.projects.assertAccess(
-        projectId,
-        params.user.id,
-        params.user.role as Role,
-      );
-    }
+    await this.projects.assertAccess(projectId, params.user.id, role);
 
-    const project = projectId
-      ? await this.prisma.project.findUnique({ where: { id: projectId } })
-      : null;
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+    });
 
     const assignedTasks = await this.prisma.task.findMany({
-      where:
-        params.user.role === Role.WORKER
-          ? { assigneeId: params.user.id, ...(projectId ? { projectId } : {}) }
-          : projectId
-            ? { projectId }
-            : {},
+      where: isFieldWorker(role)
+        ? { assigneeId: params.user.id, projectId }
+        : { projectId },
       select: {
         id: true,
         title: true,
@@ -482,7 +482,7 @@ export class VoiceService {
           const matches = await this.tasks.findByReference(
             projectId,
             intent.taskReference,
-            user.role === Role.WORKER ? user.id : undefined,
+            isFieldWorker(user.role) ? user.id : undefined,
           );
           if (matches.length === 1) taskId = matches[0].id;
           else if (matches.length === 0) {
@@ -574,7 +574,7 @@ export class VoiceService {
           const matches = await this.tasks.findByReference(
             projectId,
             intent.taskReference,
-            user.role === Role.WORKER ? user.id : undefined,
+            isFieldWorker(user.role) ? user.id : undefined,
           );
           if (matches.length === 1) taskId = matches[0].id;
         }
@@ -619,11 +619,10 @@ export class VoiceService {
         };
       }
       case 'daily_summary': {
-        if (user.role !== Role.SUPERVISOR) {
-          return {
-            message: 'Daily summary sirf supervisor ke liye hai.',
-            data: null,
-          };
+        if (!isStaffRole(user.role)) {
+          throw new ForbiddenException(
+            'Daily summary is only available to supervisors and admins',
+          );
         }
         const summary = await this.summaries.generate(
           user.id,

@@ -1,6 +1,7 @@
 import React, { useCallback, useState } from 'react';
 import { Alert, FlatList, RefreshControl, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { isStaffRole } from '@kaamsetu/shared';
 import { api } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
 import { Card, Loader, PrimaryButton, Screen, Subtitle, Title, useThemeColors } from '../components/ui';
@@ -16,6 +17,7 @@ export function IncidentsScreen() {
     setLoading(true);
     api<any[]>('/incidents')
       .then(setItems)
+      .catch((err) => Alert.alert('Failed to load', (err as Error).message))
       .finally(() => setLoading(false));
   }, []);
 
@@ -57,7 +59,7 @@ export function IncidentsScreen() {
               {item.category} · {item.severity} · {item.status}
             </Text>
             <Text style={{ color: c.ink, marginTop: 8 }}>{item.description}</Text>
-            {user?.role === 'SUPERVISOR' && item.status === 'open' && (
+            {user && isStaffRole(user.role) && item.status === 'open' && (
               <View style={{ marginTop: 10 }}>
                 <PrimaryButton
                   label="Acknowledge"
@@ -65,7 +67,7 @@ export function IncidentsScreen() {
                 />
               </View>
             )}
-            {user?.role === 'SUPERVISOR' && item.status === 'acknowledged' && (
+            {user && isStaffRole(user.role) && item.status === 'acknowledged' && (
               <View style={{ marginTop: 10 }}>
                 <PrimaryButton label="Resolve" onPress={() => setStatus(item.id, 'resolved')} />
               </View>

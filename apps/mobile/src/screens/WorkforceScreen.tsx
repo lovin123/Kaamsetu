@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { FlatList, Pressable, Text } from 'react-native';
+import { Alert, FlatList, Pressable, Text } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { api } from '../api/client';
 import { Card, Loader, Screen, Subtitle, Title, useThemeColors } from '../components/ui';
@@ -19,6 +19,7 @@ export function WorkforceScreen() {
           setWorkers(w);
           setTasks(t);
         })
+        .catch((err) => Alert.alert('Failed to load', (err as Error).message))
         .finally(() => setLoading(false));
     }, []),
   );

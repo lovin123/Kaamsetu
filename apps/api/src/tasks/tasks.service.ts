@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Role, TaskStatus } from '@prisma/client';
+import { isFieldWorker } from '@kaamsetu/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProjectsService } from '../projects/projects.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -21,7 +22,10 @@ export class TasksService {
   ) {}
 
   async list(userId: string, role: Role, projectId?: string) {
-    if (role === Role.WORKER) {
+    if (isFieldWorker(role)) {
+      if (projectId) {
+        await this.projects.assertAccess(projectId, userId, role);
+      }
       return this.prisma.task.findMany({
         where: {
           assigneeId: userId,
@@ -34,8 +38,20 @@ export class TasksService {
         orderBy: { updatedAt: 'desc' },
       });
     }
+
+    if (projectId) {
+      await this.projects.assertAccess(projectId, userId, role);
+    }
+    const scope = await this.projects.accessibleProjectIds(userId, role);
+    const projectFilter =
+      projectId
+        ? { projectId }
+        : scope === 'ALL'
+          ? {}
+          : { projectId: { in: scope } };
+
     return this.prisma.task.findMany({
-      where: projectId ? { projectId } : undefined,
+      where: projectFilter,
       include: {
         project: { select: { id: true, name: true, code: true } },
         assignee: { select: { id: true, name: true } },
@@ -59,14 +75,16 @@ export class TasksService {
       },
     });
     if (!task) throw new NotFoundException('Task not found');
-    if (role === Role.WORKER && task.assigneeId !== userId) {
+    if (isFieldWorker(role) && task.assigneeId !== userId) {
       throw new ForbiddenException();
     }
+    // Membership + active project (workers included — not just historical assignee)
+    await this.projects.assertAccess(task.projectId, userId, role);
     return task;
   }
 
   async create(dto: CreateTaskDto, creatorId: string, role: Role = Role.SUPERVISOR) {
-    await this.projects.assertAccess(dto.projectId, creatorId, role);
+    await this.projects.assertStaffAccess(dto.projectId, creatorId, role);
     if (dto.assigneeId) {
       await this.projects.assertAssigneeInProject(dto.assigneeId, dto.projectId);
     }
@@ -103,7 +121,7 @@ export class TasksService {
   ) {
     const existing = await this.prisma.task.findUnique({ where: { id: taskId } });
     if (!existing) throw new NotFoundException('Task not found');
-    await this.projects.assertAccess(existing.projectId, actorId, role);
+    await this.projects.assertStaffAccess(existing.projectId, actorId, role);
     await this.projects.assertAssigneeInProject(assigneeId, existing.projectId);
     const task = await this.prisma.task.update({
       where: { id: taskId },
@@ -130,6 +148,10 @@ export class TasksService {
     dto: UpdateProgressDto,
   ) {
     const task = await this.getOne(taskId, userId, role);
+    // Non-workers need site staff membership (not mere project membership)
+    if (!isFieldWorker(role)) {
+      await this.projects.assertStaffAccess(task.projectId, userId, role);
+    }
     // Always count open blockers — do not rely on current status alone
     const openBlockers = await this.prisma.blocker.count({
       where: { taskId, status: 'open' },
@@ -158,18 +180,17 @@ export class TasksService {
           progressPercent: dto.progressPercent,
           notes: dto.notes,
           transcript: dto.transcript,
-          source: dto.source ?? 'manual',
+          // Never accept client-forged supervisor_override
+          source: dto.source === 'voice' ? 'voice' : 'manual',
         },
       }),
     ]);
 
-    const supervisors = await this.prisma.projectMember.findMany({
-      where: { projectId: task.projectId, role: Role.SUPERVISOR },
-    });
+    const staffIds = await this.projects.listStaffMemberIds(task.projectId);
     await Promise.all(
-      supervisors.map((s) =>
+      staffIds.map((staffId) =>
         this.notifications.create({
-          userId: s.userId,
+          userId: staffId,
           type: 'progress_update',
           title: 'Progress update',
           body: `${task.title}: ${dto.progressPercent}%`,
@@ -193,7 +214,7 @@ export class TasksService {
   ) {
     const existing = await this.prisma.task.findUnique({ where: { id: taskId } });
     if (!existing) throw new NotFoundException('Task not found');
-    await this.projects.assertAccess(existing.projectId, actorId, role);
+    await this.projects.assertStaffAccess(existing.projectId, actorId, role);
 
     const allowed: Record<TaskStatus, TaskStatus[]> = {
       [TaskStatus.pending]: [
@@ -225,6 +246,17 @@ export class TasksService {
       );
     }
 
+    if (status === TaskStatus.completed) {
+      const openBlockers = await this.prisma.blocker.count({
+        where: { taskId, status: 'open' },
+      });
+      if (openBlockers > 0) {
+        throw new BadRequestException(
+          'Cannot complete a task with open blockers — resolve them first',
+        );
+      }
+    }
+
     const [updated] = await this.prisma.$transaction([
       this.prisma.task.update({ where: { id: taskId }, data: { status } }),
       this.prisma.taskProgress.create({
@@ -241,7 +273,7 @@ export class TasksService {
     if (existing.assigneeId && existing.assigneeId !== actorId) {
       await this.notifications.create({
         userId: existing.assigneeId,
-        type: 'task_assigned',
+        type: 'task_status_changed',
         title: 'Task status updated',
         body: `${existing.title}: ${existing.status} → ${status}`,
         data: { taskId, status },

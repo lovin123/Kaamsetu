@@ -1,5 +1,4 @@
 import { PrismaClient, Role, TaskStatus } from '@prisma/client';
-import * as bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
@@ -20,14 +19,22 @@ async function main() {
   await prisma.task.deleteMany();
   await prisma.projectMember.deleteMany();
   await prisma.project.deleteMany();
+  await prisma.otpChallenge.deleteMany();
   await prisma.user.deleteMany();
 
-  const passwordHash = await bcrypt.hash('password123', 10);
+  // Store canonical phones (OTP_PHONE_DEFAULT_COUNTRY=91 → 10-digit local becomes 91…)
+  const admin = await prisma.user.create({
+    data: {
+      phone: '919000000000',
+      name: 'KaamSetu Admin',
+      role: Role.ADMIN,
+      preferredLanguage: 'en-IN',
+    },
+  });
 
   const supervisor = await prisma.user.create({
     data: {
-      phone: '9000000009',
-      passwordHash,
+      phone: '919000000009',
       name: 'Ramesh Site Manager',
       role: Role.SUPERVISOR,
       preferredLanguage: 'hi-IN',
@@ -36,8 +43,7 @@ async function main() {
 
   const worker1 = await prisma.user.create({
     data: {
-      phone: '9000000001',
-      passwordHash,
+      phone: '919000000001',
       name: 'Suresh Electrician',
       role: Role.WORKER,
       preferredLanguage: 'hi-IN',
@@ -46,8 +52,7 @@ async function main() {
 
   const worker2 = await prisma.user.create({
     data: {
-      phone: '9000000002',
-      passwordHash,
+      phone: '919000000002',
       name: 'Ganesh Plumber',
       role: Role.WORKER,
       preferredLanguage: 'mr-IN',
@@ -65,6 +70,7 @@ async function main() {
 
   await prisma.projectMember.createMany({
     data: [
+      { projectId: project.id, userId: admin.id, role: Role.ADMIN },
       { projectId: project.id, userId: supervisor.id, role: Role.SUPERVISOR },
       { projectId: project.id, userId: worker1.id, role: Role.WORKER },
       { projectId: project.id, userId: worker2.id, role: Role.WORKER },
@@ -149,9 +155,11 @@ async function main() {
     },
   });
 
-  console.log('Seed complete');
-  console.log('Supervisor: 9000000009 / password123');
-  console.log('Workers: 9000000001, 9000000002 / password123');
+  console.log('Seed complete (OTP auth — no passwords)');
+  console.log('Enter 10-digit phones in the app (stored as 91…):');
+  console.log('  Admin 9000000000 → 919000000000');
+  console.log('  Supervisor 9000000009 → 919000000009');
+  console.log('  Workers 9000000001 / 9000000002');
   console.log(`Project: ${project.name} (${project.id})`);
 }
 

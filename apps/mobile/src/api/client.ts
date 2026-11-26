@@ -10,7 +10,7 @@ export type User = {
   id: string;
   phone: string;
   name: string;
-  role: 'WORKER' | 'SUPERVISOR';
+  role: 'WORKER' | 'SUPERVISOR' | 'ADMIN';
   preferredLanguage: string;
 };
 
@@ -20,6 +20,22 @@ export class ApiError extends Error {
     super(message);
     this.status = status;
   }
+}
+
+/** Nest often returns { message: string | string[], statusCode } */
+function parseApiErrorMessage(text: string, fallback: string): string {
+  if (!text?.trim()) return fallback;
+  try {
+    const body = JSON.parse(text) as { message?: unknown };
+    const msg = body.message;
+    if (typeof msg === 'string' && msg.trim()) return msg;
+    if (Array.isArray(msg) && msg.length) {
+      return msg.map(String).join(', ');
+    }
+  } catch {
+    // plain text
+  }
+  return text;
 }
 
 export class SessionExpiredError extends Error {
@@ -187,13 +203,16 @@ export async function api<T>(
     } else {
       // Refresh failed or session cleared — surface as auth error
       const text = await res.text().catch(() => '');
-      throw new ApiError(401, text || 'Unauthorized');
+      throw new ApiError(401, parseApiErrorMessage(text, 'Unauthorized'));
     }
   }
 
   if (!res.ok) {
     const text = await res.text();
-    throw new ApiError(res.status, text || `HTTP ${res.status}`);
+    throw new ApiError(
+      res.status,
+      parseApiErrorMessage(text, `HTTP ${res.status}`),
+    );
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -216,34 +235,59 @@ export function isNetworkError(err: unknown) {
   );
 }
 
-export async function login(phone: string, password: string) {
-  const data = await api<{
-    accessToken: string;
-    refreshToken: string;
-    user: User;
-  }>('/auth/login', {
-    method: 'POST',
-    auth: false,
-    body: JSON.stringify({ phone, password }),
-  });
-  await setSession(data.accessToken, data.user, data.refreshToken);
-  return data;
+export type AuthRole = 'WORKER' | 'SUPERVISOR' | 'ADMIN';
+export type OtpPurpose = 'login' | 'register';
+
+export type BootstrapStatus = {
+  firstAdminOpen: boolean;
+  defaultRegisterRole: 'ADMIN' | 'WORKER';
+};
+
+export async function getRefreshToken() {
+  return getSecure(REFRESH_KEY);
 }
 
-export async function register(input: {
+export async function getBootstrapStatus() {
+  return api<BootstrapStatus>('/auth/bootstrap-status', {
+    method: 'GET',
+    auth: false,
+  });
+}
+
+export async function requestOtp(input: {
   phone: string;
-  password: string;
-  name: string;
+  purpose: OtpPurpose;
+  bootstrapSecret?: string;
+}) {
+  return api<{
+    ok: true;
+    expiresInSeconds: number;
+    assignedRole?: AuthRole;
+    /** Present in development / when OTP_DEV_EXPOSE=true */
+    devCode?: string;
+  }>('/auth/otp/request', {
+    method: 'POST',
+    auth: false,
+    body: JSON.stringify(input),
+  });
+}
+
+export async function verifyOtp(input: {
+  phone: string;
+  code: string;
+  purpose: OtpPurpose;
+  name?: string;
   preferredLanguage?: string;
+  bootstrapSecret?: string;
 }) {
   const data = await api<{
     accessToken: string;
     refreshToken: string;
     user: User;
-  }>('/auth/register', {
+  }>('/auth/otp/verify', {
     method: 'POST',
     auth: false,
-    body: JSON.stringify({ ...input, role: 'WORKER' }),
+    body: JSON.stringify(input),
   });
   await setSession(data.accessToken, data.user, data.refreshToken);
   return data;
